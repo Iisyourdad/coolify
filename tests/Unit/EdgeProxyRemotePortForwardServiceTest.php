@@ -71,7 +71,10 @@ it('mirrors application published tcp ports onto the edge server for remote depl
     expect(data_get($parsedCompose, 'services.application-application-port-forward-edge-port-proxy.container_name'))
         ->toBe('application-application-port-forward-edge-port-proxy')
         ->and(data_get($parsedCompose, 'services.application-application-port-forward-edge-port-proxy.ports'))
-        ->toBe(['25565:25565']);
+        ->toBe(['25565:25565'])
+        ->and(collect($manager->calls[0]['commands'])->contains(
+            fn (string $command) => str_contains($command, 'docker compose') && str_contains($command, ' pull')
+        ))->toBeFalse();
 });
 
 it('mirrors application published udp ports onto the edge server for remote deployments', function () {

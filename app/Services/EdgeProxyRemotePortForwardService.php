@@ -341,7 +341,7 @@ class EdgeProxyRemotePortForwardService
             "mkdir -p $escapedConfigurationDirectory",
             "echo '{$nginxConfig}' | base64 -d | tee $escapedNginxPath > /dev/null",
             "echo '{$dockerCompose}' | base64 -d | tee $escapedComposePath > /dev/null",
-            "docker compose --project-directory $escapedConfigurationDirectory pull",
+            // Avoid an unconditional registry round-trip on every application deploy.
             "docker compose --project-directory $escapedConfigurationDirectory up -d",
         ]);
     }
