@@ -24,6 +24,7 @@ use App\Models\StandalonePostgresql;
 use App\Models\StandaloneRedis;
 use App\Models\Team;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Cache;
 
 class CleanupStuckedResources extends Command
 {
@@ -33,7 +34,20 @@ class CleanupStuckedResources extends Command
 
     public function handle()
     {
-        $this->cleanup_stucked_resources();
+        $lock = Cache::lock('cleanup-stucked-resources-running', 300);
+        if (! $lock->get()) {
+            $this->info('cleanup:stucked-resources already running, skipping duplicate invocation.');
+
+            return self::SUCCESS;
+        }
+
+        try {
+            $this->cleanup_stucked_resources();
+        } finally {
+            $lock->release();
+        }
+
+        return self::SUCCESS;
     }
 
     private function cleanup_stucked_resources()

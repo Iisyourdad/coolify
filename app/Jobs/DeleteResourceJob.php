@@ -29,6 +29,7 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\Middleware\WithoutOverlapping;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Cache;
 
 class DeleteResourceJob implements ShouldBeEncrypted, ShouldQueue
 {
@@ -188,6 +189,10 @@ class DeleteResourceJob implements ShouldBeEncrypted, ShouldQueue
 
     protected function queueStuckedResourcesCleanup(): void
     {
+        if (! Cache::add('cleanup-stucked-resources-queued', true, now()->addSeconds(30))) {
+            return;
+        }
+
         Artisan::queue('cleanup:stucked-resources');
     }
 
