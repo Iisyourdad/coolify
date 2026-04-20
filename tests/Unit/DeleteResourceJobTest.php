@@ -6,6 +6,7 @@ use App\Models\Application;
 use App\Models\Service;
 use App\Services\EdgeProxyRemotePortForwardService;
 use App\Services\EdgeProxyRemoteRouteService;
+use Illuminate\Queue\Middleware\WithoutOverlapping;
 
 it('keeps application pending deletion when edge route cleanup fails', function () {
     $application = Mockery::mock(Application::class)->makePartial();
@@ -260,4 +261,24 @@ it('releases queued service deletion when edge cleanup is still pending', functi
 
     expect($job->releasedDelay)->toBe(4)
         ->and($job->cleanupQueueCount)->toBe(1);
+});
+
+it('uses a resource-scoped overlapping lock to prevent concurrent deletions', function () {
+    $application = new Application;
+    $application->uuid = 'application-delete-lock';
+
+    $job = new class($application, false, false, false, false) extends DeleteResourceJob
+    {
+        public function lockKey(): string
+        {
+            return $this->deletionLockKey();
+        }
+    };
+
+    $middlewares = $job->middleware();
+
+    expect($middlewares)->toHaveCount(1)
+        ->and($middlewares[0])->toBeInstanceOf(WithoutOverlapping::class)
+        ->and($job->lockKey())->toContain('delete-resource-')
+        ->and($job->lockKey())->toContain('application-delete-lock');
 });

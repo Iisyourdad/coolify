@@ -26,6 +26,7 @@ use Illuminate\Contracts\Queue\ShouldBeEncrypted;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Queue\Middleware\WithoutOverlapping;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Artisan;
 
@@ -48,6 +49,11 @@ class DeleteResourceJob implements ShouldBeEncrypted, ShouldQueue
     public function backoff(): array
     {
         return isDev() ? [1, 5, 15] : [60, 300, 900, 1800, 3600];
+    }
+
+    public function middleware(): array
+    {
+        return [(new WithoutOverlapping($this->deletionLockKey()))->expireAfter(3600)->dontRelease()];
     }
 
     public function handle()
@@ -224,6 +230,13 @@ class DeleteResourceJob implements ShouldBeEncrypted, ShouldQueue
         }
 
         $this->resource->delete();
+    }
+
+    protected function deletionLockKey(): string
+    {
+        $resourceIdentifier = data_get($this->resource, 'uuid') ?? data_get($this->resource, 'id') ?? spl_object_id($this->resource);
+
+        return 'delete-resource-'.$this->resource->getMorphClass().'-'.$resourceIdentifier;
     }
 
     private function deleteApplicationPreview()
