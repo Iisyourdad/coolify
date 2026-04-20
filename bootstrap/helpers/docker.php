@@ -218,7 +218,6 @@ function get_port_from_dockerfile($dockerfile): ?int
 function defaultDatabaseLabels($database)
 {
     $labels = collect([]);
-    $usePublicCertResolver = shouldUsePublicCertResolver($application->destination->server);
     $labels->push('coolify.managed=true');
     $labels->push('coolify.type=database');
     $labels->push('coolify.databaseId='.$database->id);
@@ -423,10 +422,19 @@ function shouldUsePublicCertResolver(?Server $server): bool
         return true;
     }
 
-    $masterServerId = Server::query()
-        ->where('team_id', $teamId)
-        ->whereRelation('settings', 'is_master_domain_router_enabled', true)
-        ->value('id');
+    $cacheBinding = 'shouldUsePublicCertResolver.masterServerIds';
+    $cachedMasterServerIds = app()->bound($cacheBinding) ? app($cacheBinding) : [];
+
+    if (! array_key_exists($teamId, $cachedMasterServerIds)) {
+        $cachedMasterServerIds[$teamId] = Server::query()
+            ->where('team_id', $teamId)
+            ->whereRelation('settings', 'is_master_domain_router_enabled', true)
+            ->value('id');
+
+        app()->instance($cacheBinding, $cachedMasterServerIds);
+    }
+
+    $masterServerId = $cachedMasterServerIds[$teamId];
 
     if (! $masterServerId) {
         return true;

@@ -6,11 +6,10 @@ use App\Actions\Database\StartDatabaseProxy;
 use App\Actions\Database\StopDatabaseProxy;
 use App\Actions\Shared\ComplexStatusCheck;
 use App\Events\ServiceChecked;
+use App\Jobs\SyncApplicationEdgeProxyJob;
 use App\Models\ApplicationPreview;
 use App\Models\Server;
 use App\Models\ServiceDatabase;
-use App\Services\EdgeProxyRemotePortForwardService;
-use App\Services\EdgeProxyRemoteRouteService;
 use App\Services\ContainerStatusAggregator;
 use App\Traits\CalculatesExcludedStatus;
 use Illuminate\Support\Arr;
@@ -519,12 +518,8 @@ class GetContainersStatus
                     if (! $application) {
                         return;
                     }
-                    try {
-                        app(EdgeProxyRemoteRouteService::class)->syncApplication($application);
-                        app(EdgeProxyRemotePortForwardService::class)->syncApplication($application);
-                    } catch (\Throwable) {
-                        // Avoid failing status checks if edge proxy sync fails.
-                    }
+
+                    SyncApplicationEdgeProxyJob::dispatch($application);
                 });
         }
 

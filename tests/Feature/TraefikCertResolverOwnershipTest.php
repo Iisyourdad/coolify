@@ -13,6 +13,10 @@ use Illuminate\Support\Facades\DB;
 
 uses(RefreshDatabase::class);
 
+beforeEach(function () {
+    app()->forgetInstance('shouldUsePublicCertResolver.masterServerIds');
+});
+
 it('uses public cert resolver when no master domain router is configured', function () {
     $user = User::factory()->create();
     $team = $user->teams()->first();
@@ -44,6 +48,41 @@ it('uses public cert resolver only on the master domain router', function () {
 
     expect(shouldUsePublicCertResolver($masterServer))->toBeTrue();
     expect(shouldUsePublicCertResolver($otherServer))->toBeFalse();
+});
+
+it('memoizes master domain router ownership per team', function () {
+    $user = User::factory()->create();
+    $team = $user->teams()->first();
+
+    $masterServer = Server::factory()->create([
+        'team_id' => $team->id,
+        'proxy' => ['type' => ProxyTypes::TRAEFIK->value],
+    ]);
+    $otherServer = Server::factory()->create([
+        'team_id' => $team->id,
+        'proxy' => ['type' => ProxyTypes::TRAEFIK->value],
+    ]);
+
+    DB::table('server_settings')
+        ->where('server_id', $masterServer->id)
+        ->update(['is_master_domain_router_enabled' => true]);
+
+    DB::flushQueryLog();
+    DB::enableQueryLog();
+
+    expect(shouldUsePublicCertResolver($masterServer))->toBeTrue();
+    expect(shouldUsePublicCertResolver($otherServer))->toBeFalse();
+    expect(shouldUsePublicCertResolver($otherServer))->toBeFalse();
+
+    $serverLookupQueries = collect(DB::getQueryLog())
+        ->filter(function (array $query) {
+            $sql = strtolower($query['query']);
+
+            return (str_contains($sql, 'from "servers"') || str_contains($sql, 'from `servers`'))
+                && (str_contains($sql, '"team_id"') || str_contains($sql, '`team_id`'));
+        });
+
+    expect($serverLookupQueries)->toHaveCount(1);
 });
 
 it('passes public cert resolver ownership through both parser paths', function () {
