@@ -3,6 +3,7 @@
 use App\Exceptions\EdgeProxyCleanupPendingException;
 use App\Jobs\DeleteResourceJob;
 use App\Models\Application;
+use App\Models\Service;
 use App\Services\EdgeProxyRemotePortForwardService;
 use App\Services\EdgeProxyRemoteRouteService;
 
@@ -147,4 +148,116 @@ it('keeps application pending deletion when concrete edge port cleanup hits an s
 
     expect(fn () => $job->handle())
         ->toThrow(EdgeProxyCleanupPendingException::class, 'Edge cleanup pending for application application-concrete-port-ssh-failure');
+});
+
+it('releases queued application deletion when edge cleanup is still pending', function () {
+    $application = Mockery::mock(Application::class)->makePartial();
+    $application->uuid = 'application-release-cleanup';
+    $application->shouldReceive('trashed')->once()->andReturn(false);
+    $application->shouldReceive('delete')->once();
+    $application->shouldReceive('forceDelete')->never();
+
+    $routeService = Mockery::mock(EdgeProxyRemoteRouteService::class);
+    $routeService->shouldReceive('deleteApplication')->once()->with($application)->andReturn([
+        'Failed to delete edge proxy route file for application application-release-cleanup on edge server edge-1 (101): application route cleanup failed',
+    ]);
+
+    $portForwardService = Mockery::mock(EdgeProxyRemotePortForwardService::class);
+    $portForwardService->shouldReceive('deleteApplication')->once()->with($application)->andReturn([]);
+
+    app()->instance(EdgeProxyRemoteRouteService::class, $routeService);
+    app()->instance(EdgeProxyRemotePortForwardService::class, $portForwardService);
+
+    $job = new class($application, false, false, false, false) extends DeleteResourceJob
+    {
+        public ?int $releasedDelay = null;
+
+        public int $cleanupQueueCount = 0;
+
+        protected function prepareResourceForDeletion(): void {}
+
+        protected function dispatchDockerCleanupIfNeeded(): void {}
+
+        protected function queueStuckedResourcesCleanup(): void
+        {
+            $this->cleanupQueueCount++;
+        }
+
+        protected function shouldReleasePendingEdgeCleanup(): bool
+        {
+            return true;
+        }
+
+        public function backoff(): array
+        {
+            return [3, 7, 11];
+        }
+
+        public function attempts(): int
+        {
+            return 2;
+        }
+
+        public function release($delay = 0): void
+        {
+            $this->releasedDelay = $delay;
+        }
+    };
+
+    $job->handle();
+
+    expect($job->releasedDelay)->toBe(7)
+        ->and($job->cleanupQueueCount)->toBe(1);
+});
+
+it('releases queued service deletion when edge cleanup is still pending', function () {
+    $service = Mockery::mock(Service::class)->makePartial();
+    $service->uuid = 'service-release-cleanup';
+    $service->shouldReceive('trashed')->once()->andReturn(false);
+    $service->shouldReceive('delete')->once();
+    $service->shouldReceive('forceDelete')->never();
+
+    $job = new class($service, false, false, false, false) extends DeleteResourceJob
+    {
+        public ?int $releasedDelay = null;
+
+        public int $cleanupQueueCount = 0;
+
+        protected function stopAndDeleteServiceResource(): void
+        {
+            throw new EdgeProxyCleanupPendingException('service', $this->resource->uuid, [
+                'Failed to delete edge proxy route file for service service-release-cleanup on edge server edge-3 (303): route cleanup failed',
+            ]);
+        }
+
+        protected function queueStuckedResourcesCleanup(): void
+        {
+            $this->cleanupQueueCount++;
+        }
+
+        protected function shouldReleasePendingEdgeCleanup(): bool
+        {
+            return true;
+        }
+
+        public function backoff(): array
+        {
+            return [4, 8, 12];
+        }
+
+        public function attempts(): int
+        {
+            return 1;
+        }
+
+        public function release($delay = 0): void
+        {
+            $this->releasedDelay = $delay;
+        }
+    };
+
+    $job->handle();
+
+    expect($job->releasedDelay)->toBe(4)
+        ->and($job->cleanupQueueCount)->toBe(1);
 });

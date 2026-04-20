@@ -52,39 +52,41 @@ class DeleteResourceJob implements ShouldBeEncrypted, ShouldQueue
 
     public function handle()
     {
-        // Handle ApplicationPreview instances separately
-        if ($this->resource instanceof ApplicationPreview) {
-            $this->deleteApplicationPreview();
+        try {
+            // Handle ApplicationPreview instances separately
+            if ($this->resource instanceof ApplicationPreview) {
+                $this->deleteApplicationPreview();
 
-            return;
-        }
+                return;
+            }
 
-        if ($this->resource instanceof Service) {
-            $this->markResourcePendingDeletion();
-            $this->stopAndDeleteServiceResource();
-            $this->queueStuckedResourcesCleanup();
-
-            return;
-        }
-
-        if ($this->resource instanceof Application) {
-            $this->markResourcePendingDeletion();
-        }
-
-        $this->prepareResourceForDeletion();
-
-        if ($this->resource instanceof Application) {
-            $edgeCleanupFailures = $this->cleanupApplicationEdgeProxyState($this->resource);
-            if ($edgeCleanupFailures !== []) {
+            if ($this->resource instanceof Service) {
+                $this->markResourcePendingDeletion();
+                $this->stopAndDeleteServiceResource();
                 $this->queueStuckedResourcesCleanup();
 
-                throw new EdgeProxyCleanupPendingException('application', $this->resource->uuid, $edgeCleanupFailures);
+                return;
             }
-        }
 
-        $this->resource->forceDelete();
-        $this->dispatchDockerCleanupIfNeeded();
-        $this->queueStuckedResourcesCleanup();
+            if ($this->resource instanceof Application) {
+                $this->markResourcePendingDeletion();
+            }
+
+            $this->prepareResourceForDeletion();
+
+            if ($this->resource instanceof Application) {
+                $edgeCleanupFailures = $this->cleanupApplicationEdgeProxyState($this->resource);
+                if ($edgeCleanupFailures !== []) {
+                    throw new EdgeProxyCleanupPendingException('application', $this->resource->uuid, $edgeCleanupFailures);
+                }
+            }
+
+            $this->resource->forceDelete();
+            $this->dispatchDockerCleanupIfNeeded();
+            $this->queueStuckedResourcesCleanup();
+        } catch (EdgeProxyCleanupPendingException $exception) {
+            $this->retryPendingEdgeCleanup($exception);
+        }
     }
 
     protected function stopAndDeleteServiceResource(): void
@@ -181,6 +183,34 @@ class DeleteResourceJob implements ShouldBeEncrypted, ShouldQueue
     protected function queueStuckedResourcesCleanup(): void
     {
         Artisan::queue('cleanup:stucked-resources');
+    }
+
+    protected function retryPendingEdgeCleanup(EdgeProxyCleanupPendingException $exception): void
+    {
+        $this->queueStuckedResourcesCleanup();
+
+        if (! $this->shouldReleasePendingEdgeCleanup()) {
+            throw $exception;
+        }
+
+        $this->release($this->pendingEdgeCleanupBackoff());
+    }
+
+    protected function shouldReleasePendingEdgeCleanup(): bool
+    {
+        return isset($this->job);
+    }
+
+    protected function pendingEdgeCleanupBackoff(): int
+    {
+        $backoff = array_values($this->backoff());
+        if ($backoff === []) {
+            return 0;
+        }
+
+        $attemptIndex = max($this->attempts() - 1, 0);
+
+        return $backoff[min($attemptIndex, count($backoff) - 1)];
     }
 
     protected function markResourcePendingDeletion(): void
