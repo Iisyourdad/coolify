@@ -10,6 +10,7 @@ use App\Actions\Server\ValidatePrerequisites;
 use App\Enums\ProxyTypes;
 use App\Events\ServerReachabilityChanged;
 use App\Helpers\SslHelper;
+use App\Jobs\ConfirmServerUnreachableJob;
 use App\Jobs\CheckAndStartSentinelJob;
 use App\Jobs\CheckTraefikVersionForServerJob;
 use App\Jobs\RegenerateSslCertJob;
@@ -1215,28 +1216,14 @@ $schema://$host {
         }
 
         $this->increment('unreachable_count');
+        $this->settings->is_reachable = false;
+        $this->settings->save();
 
-        if ($this->unreachable_count === 1) {
-            $this->settings->is_reachable = true;
-            $this->settings->save();
-
+        if ($unreachableNotificationSent || $this->unreachable_count < 2) {
             return;
         }
 
-        if ($this->unreachable_count >= 2 && ! $unreachableNotificationSent) {
-            $failedChecks = 0;
-            for ($i = 0; $i < 3; $i++) {
-                $status = $this->serverStatus();
-                sleep(5);
-                if (! $status) {
-                    $failedChecks++;
-                }
-            }
-
-            if ($failedChecks === 3 && ! $unreachableNotificationSent) {
-                $this->sendUnreachableNotification();
-            }
-        }
+        ConfirmServerUnreachableJob::dispatchIfNotQueued($this);
     }
 
     public function sendReachableNotification()
@@ -1278,8 +1265,8 @@ $schema://$host {
             if ($this->settings->is_reachable === true) {
                 $this->settings->is_reachable = false;
                 $this->settings->save();
-                ServerReachabilityChanged::dispatch($this);
             }
+            ServerReachabilityChanged::dispatch($this);
 
             return ['uptime' => false, 'error' => $e->getMessage()];
         }
