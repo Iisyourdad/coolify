@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Enums\ProxyTypes;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use OpenApi\Attributes as OA;
@@ -139,6 +140,12 @@ class ServerSetting extends Model
                 $settings->server->restartSentinel();
             }
         });
+        static::saved(function ($settings) {
+            $settings->forgetShouldUsePublicCertResolverCache();
+        });
+        static::deleted(function ($settings) {
+            $settings->forgetShouldUsePublicCertResolverCache();
+        });
         static::saving(function ($setting) {
             $setting->ensureMasterDomainRouterUsesTraefik();
             $setting->ensureSingleMasterDomainRouterEnabled();
@@ -201,6 +208,23 @@ class ServerSetting extends Model
                 ->whereHas('server', fn ($query) => $query->where('team_id', $teamId))
                 ->update(['is_master_domain_router_enabled' => false]);
         });
+    }
+
+    private function forgetShouldUsePublicCertResolverCache(): void
+    {
+        if (is_null($this->server_id)) {
+            return;
+        }
+
+        $teamId = $this->relationLoaded('server')
+            ? data_get($this, 'server.team_id')
+            : Server::query()->whereKey($this->server_id)->value('team_id');
+
+        if (is_null($teamId)) {
+            return;
+        }
+
+        Cache::forget(shouldUsePublicCertResolverCacheKey((int) $teamId));
     }
 
     /**

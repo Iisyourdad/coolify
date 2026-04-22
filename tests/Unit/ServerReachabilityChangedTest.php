@@ -19,11 +19,14 @@ it('keeps a server marked unreachable after the first failed reachability check'
         'team_id' => $team->id,
     ]);
 
+    $server->forceFill([
+        'unreachable_count' => 0,
+        'unreachable_notification_sent' => false,
+    ])->saveQuietly();
+
     $server->settings->update([
         'is_reachable' => false,
         'is_usable' => false,
-        'unreachable_count' => 0,
-        'unreachable_notification_sent' => false,
     ]);
 
     $server->refresh();
@@ -42,11 +45,14 @@ it('queues a confirmation job after repeated unreachable checks', function () {
         'team_id' => $team->id,
     ]);
 
+    $server->forceFill([
+        'unreachable_count' => 0,
+        'unreachable_notification_sent' => false,
+    ])->saveQuietly();
+
     $server->settings->update([
         'is_reachable' => false,
         'is_usable' => false,
-        'unreachable_count' => 0,
-        'unreachable_notification_sent' => false,
     ]);
 
     $server->refresh();

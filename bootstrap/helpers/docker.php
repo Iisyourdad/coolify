@@ -6,6 +6,7 @@ use App\Models\ApplicationPreview;
 use App\Models\Server;
 use App\Models\ServiceApplication;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 use Spatie\Url\Url;
 use Symfony\Component\Yaml\Yaml;
@@ -426,25 +427,30 @@ function shouldUsePublicCertResolver(?Server $server): bool
         return true;
     }
 
-    $cacheBinding = 'shouldUsePublicCertResolver.masterServerIds';
-    $cachedMasterServerIds = app()->bound($cacheBinding) ? app($cacheBinding) : [];
-
-    if (! array_key_exists($teamId, $cachedMasterServerIds)) {
-        $cachedMasterServerIds[$teamId] = Server::query()
+    $masterServerId = Cache::remember(
+        shouldUsePublicCertResolverCacheKey((int) $teamId),
+        now()->addMinutes(5),
+        fn () => (int) (Server::query()
             ->where('team_id', $teamId)
             ->whereRelation('settings', 'is_master_domain_router_enabled', true)
-            ->value('id');
+            ->value('id') ?? 0)
+    );
 
-        app()->instance($cacheBinding, $cachedMasterServerIds);
-    }
-
-    $masterServerId = $cachedMasterServerIds[$teamId];
-
-    if (! $masterServerId) {
+    if ($masterServerId === 0) {
         return true;
     }
 
     return (int) $masterServerId === (int) $server->id;
+}
+
+function shouldUsePublicCertResolverCacheKey(int $teamId): string
+{
+    return 'shouldUsePublicCertResolver.masterServerIds.'.$teamId;
+}
+
+function traefikCertResolverName(): string
+{
+    return config('constants.coolify.proxy.traefik.cert_resolver', 'letsencrypt');
 }
 
 function fqdnLabelsForTraefik(string $uuid, Collection $domains, bool $is_force_https_enabled = false, $onlyPort = null, ?Collection $serviceLabels = null, ?bool $is_gzip_enabled = true, ?bool $is_stripprefix_enabled = true, ?string $service_name = null, bool $generate_unique_uuid = false, ?string $image = null, string $redirect_direction = 'both', bool $is_http_basic_auth_enabled = false, ?string $http_basic_auth_username = null, ?string $http_basic_auth_password = null, bool $use_public_cert_resolver = true)
@@ -604,7 +610,7 @@ function fqdnLabelsForTraefik(string $uuid, Collection $domains, bool $is_force_
                 }
                 $labels->push("traefik.http.routers.{$https_label}.tls=true");
                 if ($use_public_cert_resolver) {
-                    $labels->push("traefik.http.routers.{$https_label}.tls.certresolver=letsencrypt");
+                    $labels->push("traefik.http.routers.{$https_label}.tls.certresolver=".traefikCertResolverName());
                 }
 
                 // Set labels for http (redirect to https)

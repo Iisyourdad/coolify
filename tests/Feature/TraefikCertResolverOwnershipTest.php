@@ -9,12 +9,13 @@ use App\Models\StandaloneDocker;
 use App\Models\Team;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
 uses(RefreshDatabase::class);
 
 beforeEach(function () {
-    app()->forgetInstance('shouldUsePublicCertResolver.masterServerIds');
+    Cache::flush();
 });
 
 it('uses public cert resolver when no master domain router is configured', function () {
@@ -85,6 +86,30 @@ it('memoizes master domain router ownership per team', function () {
     expect($serverLookupQueries)->toHaveCount(1);
 });
 
+it('invalidates cached master domain router ownership when the master changes', function () {
+    $user = User::factory()->create();
+    $team = $user->teams()->first();
+
+    $masterServer = Server::factory()->create([
+        'team_id' => $team->id,
+        'proxy' => ['type' => ProxyTypes::TRAEFIK->value],
+    ]);
+    $otherServer = Server::factory()->create([
+        'team_id' => $team->id,
+        'proxy' => ['type' => ProxyTypes::TRAEFIK->value],
+    ]);
+
+    $masterServer->settings->update(['is_master_domain_router_enabled' => true]);
+
+    expect(shouldUsePublicCertResolver($masterServer))->toBeTrue()
+        ->and(shouldUsePublicCertResolver($otherServer))->toBeFalse();
+
+    $otherServer->settings->update(['is_master_domain_router_enabled' => true]);
+
+    expect(shouldUsePublicCertResolver($masterServer))->toBeFalse()
+        ->and(shouldUsePublicCertResolver($otherServer))->toBeTrue();
+});
+
 it('passes public cert resolver ownership through both parser paths', function () {
     $parsersFile = file_get_contents(__DIR__.'/../../bootstrap/helpers/parsers.php');
 
@@ -118,4 +143,41 @@ it('generates application labels without an undefined public cert resolver varia
         ->not->toBeEmpty()
         ->and(collect($labels)->contains(fn (string $label) => str_contains($label, '.tls.certresolver=letsencrypt')))
         ->toBeTrue();
+});
+
+it('uses the configured Traefik cert resolver in application labels', function () {
+    $originalResolver = config('constants.coolify.proxy.traefik.cert_resolver');
+    config(['constants.coolify.proxy.traefik.cert_resolver' => 'myresolver']);
+
+    try {
+        $team = Team::factory()->create();
+
+        $server = Server::factory()->create([
+            'team_id' => $team->id,
+            'proxy' => ['type' => ProxyTypes::TRAEFIK->value],
+        ]);
+        $server->settings->update(['is_master_domain_router_enabled' => true]);
+
+        $destination = StandaloneDocker::query()->where('server_id', $server->id)->firstOrFail();
+        $project = Project::factory()->create(['team_id' => $team->id]);
+        $environment = Environment::factory()->create(['project_id' => $project->id]);
+
+        $application = Application::factory()->create([
+            'environment_id' => $environment->id,
+            'destination_id' => $destination->id,
+            'destination_type' => $destination->getMorphClass(),
+            'fqdn' => 'https://example.com',
+            'ports_exposes' => '3000',
+        ]);
+
+        $labels = generateLabelsApplication($application->fresh());
+
+        expect($labels)
+            ->toBeArray()
+            ->not->toBeEmpty()
+            ->and(collect($labels)->contains(fn (string $label) => str_contains($label, '.tls.certresolver=myresolver')))
+            ->toBeTrue();
+    } finally {
+        config(['constants.coolify.proxy.traefik.cert_resolver' => $originalResolver]);
+    }
 });
