@@ -487,6 +487,22 @@ class Index extends Component
             if ($warning) {
                 $this->dispatch('warning', __('warning.sslipdomain'));
             }
+            $server = data_get($this->serviceApplication, 'service.server');
+            if ($server instanceof Server) {
+                foreach ($domains as $domain) {
+                    if (containsWildcardHostname($domain)) {
+                        $this->dispatch('error', 'Wildcard domains are not supported by Coolify proxy. Use a concrete hostname like app.example.com instead.');
+
+                        return;
+                    }
+
+                    if (! validateDNSEntry($domain, $server)) {
+                        $this->dispatch('error', 'Validating DNS failed.', "Make sure you have added the DNS records correctly.<br><br>$domain->{$server->ip}<br><br>Check this <a target='_blank' class='underline dark:text-white' href='https://coolify.io/docs/knowledge-base/dns-configuration'>documentation</a> for further help.");
+
+                        return;
+                    }
+                }
+            }
 
             $this->syncApplicationData(true);
 

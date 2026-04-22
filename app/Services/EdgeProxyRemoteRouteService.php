@@ -130,7 +130,7 @@ class EdgeProxyRemoteRouteService
                     $this->hasUnsafeTraefikRuleValue($url->getPath())
                 ) {
                     $warnings[] = sprintf(
-                        'Edge proxy route skipped for service %s (%s, domain %s): domain contains unsupported characters for Traefik host/path rules.',
+                        'Edge proxy route skipped for service %s (%s, domain %s): domain contains wildcard or unsupported characters for Traefik host/path rules.',
                         $service->uuid,
                         $application->name,
                         $domain
@@ -338,7 +338,7 @@ class EdgeProxyRemoteRouteService
                 $this->hasUnsafeTraefikRuleValue($url->getPath())
             ) {
                 $warnings[] = sprintf(
-                    'Edge proxy route skipped for application %s (domain %s): domain contains unsupported characters for Traefik host/path rules.',
+                    'Edge proxy route skipped for application %s (domain %s): domain contains wildcard or unsupported characters for Traefik host/path rules.',
                     $application->uuid,
                     $domain
                 );
@@ -1552,6 +1552,6 @@ class EdgeProxyRemoteRouteService
 
     private function hasUnsafeTraefikRuleValue(string $value): bool
     {
-        return str_contains($value, '`') || preg_match('/[\r\n]/', $value) === 1;
+        return str_contains($value, '*') || str_contains($value, '`') || preg_match('/[\r\n]/', $value) === 1;
     }
 }

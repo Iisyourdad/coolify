@@ -2,6 +2,7 @@
 
 namespace App\Livewire\Project\Service;
 
+use App\Models\Server;
 use App\Models\ServiceApplication;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Livewire\Attributes\Validate;
@@ -94,6 +95,22 @@ class EditDomain extends Component
             $warning = sslipDomainWarning($this->fqdn);
             if ($warning) {
                 $this->dispatch('warning', __('warning.sslipdomain'));
+            }
+            $server = data_get($this->application, 'service.server');
+            if ($server instanceof Server) {
+                foreach ($domains as $domain) {
+                    if (containsWildcardHostname($domain)) {
+                        $this->dispatch('error', 'Wildcard domains are not supported by Coolify proxy. Use a concrete hostname like app.example.com instead.');
+
+                        return;
+                    }
+
+                    if (! validateDNSEntry($domain, $server)) {
+                        $this->dispatch('error', 'Validating DNS failed.', "Make sure you have added the DNS records correctly.<br><br>$domain->{$server->ip}<br><br>Check this <a target='_blank' class='underline dark:text-white' href='https://coolify.io/docs/knowledge-base/dns-configuration'>documentation</a> for further help.");
+
+                        return;
+                    }
+                }
             }
             // Sync to model for domain conflict check (without validation)
             $this->application->fqdn = $this->fqdn;

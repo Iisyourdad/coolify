@@ -368,6 +368,10 @@ function fqdnLabelsForCaddy(string $network, string $uuid, Collection $domains, 
     }
 
     foreach ($domains as $loop => $domain) {
+        if (containsWildcardHostname($domain)) {
+            continue;
+        }
+
         $url = Url::fromString($domain);
         $host = $url->getHost();
         $path = $url->getPath();
@@ -490,6 +494,10 @@ function fqdnLabelsForTraefik(string $uuid, Collection $domains, bool $is_force_
     }
     foreach ($domains as $loop => $domain) {
         try {
+            if (containsWildcardHostname($domain)) {
+                continue;
+            }
+
             if ($generate_unique_uuid) {
                 $uuid = new Cuid2;
             }

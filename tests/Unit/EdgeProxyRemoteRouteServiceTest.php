@@ -1285,6 +1285,60 @@ YAML;
         ->and($payload)->not->toContain('minecraft.example.com');
 });
 
+it('skips wildcard domains when building edge application routes', function () {
+    $manager = new class extends EdgeProxyRemoteRouteService
+    {
+        public array $calls = [];
+
+        protected function runRemoteCommands(Server $server, array $commands, bool $throwError = true): ?string
+        {
+            $this->calls[] = [
+                'commands' => $commands,
+                'throw_error' => $throwError,
+            ];
+
+            return null;
+        }
+    };
+
+    $edgeProxyServer = Mockery::mock(Server::class)->makePartial();
+    $edgeProxyServer->id = 0;
+    $edgeProxyServer->shouldReceive('proxyType')->andReturn('TRAEFIK');
+    $edgeProxyServer->shouldReceive('proxyPath')->andReturn('/tmp/proxy');
+
+    $deploymentServer = Mockery::mock(Server::class)->makePartial();
+    $deploymentServer->id = 21;
+    $deploymentServer->ip = '10.8.0.25';
+    $deploymentServer->proxy = ['type' => 'NONE'];
+
+    $application = new Application;
+    $application->uuid = 'application-wildcard-domain';
+    $application->build_pack = 'dockercompose';
+    $application->docker_compose_domains = json_encode([
+        'web' => ['domain' => 'https://valid.example.com:3000,https://*.example.com:3000'],
+    ]);
+    $application->docker_compose_raw = <<<'YAML'
+services:
+  web:
+    ports:
+      - "9074:3000"
+YAML;
+
+    $warnings = $manager->syncApplicationWithServers($application, $edgeProxyServer, $deploymentServer);
+
+    expect($warnings)->not->toBeEmpty()
+        ->and(collect($warnings)->contains(fn (string $warning) => str_contains($warning, 'wildcard or unsupported characters')))
+        ->toBeTrue()
+        ->and($manager->calls)->toHaveCount(1);
+
+    preg_match("/echo '([^']+)' \\| base64 -d/", $manager->calls[0]['commands'][1], $payloadMatches);
+    $payload = base64_decode($payloadMatches[1]);
+
+    expect($payload)->toContain('Host(`valid.example.com`)')
+        ->and($payload)->not->toContain('*.example.com')
+        ->and($payload)->toContain('http://10.8.0.25:9074');
+});
+
 it('returns warning when remote tunnel ip overlaps with an edge docker subnet', function () {
     $manager = new class extends EdgeProxyRemoteRouteService
     {
