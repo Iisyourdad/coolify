@@ -6,7 +6,6 @@ use App\Enums\ActivityTypes;
 use App\Enums\ApplicationDeploymentStatus;
 use App\Jobs\CheckHelperImageJob;
 use App\Jobs\PullChangelog;
-use App\Models\Application;
 use App\Models\ApplicationDeploymentQueue;
 use App\Models\Environment;
 use App\Models\InstanceSettings;
@@ -100,6 +99,11 @@ class Init extends Command
         } catch (\Throwable $e) {
             echo "Could not cleanup inprogress deployments: {$e->getMessage()}\n";
         }
+        try {
+            $this->resumeQueuedApplicationDeployments();
+        } catch (\Throwable $e) {
+            echo "Could not resume queued deployments: {$e->getMessage()}\n";
+        }
 
         try {
             $updatedTaskCount = ScheduledTaskExecution::where('status', 'running')->update([
@@ -158,7 +162,7 @@ class Init extends Command
     {
         $stuckDeployments = ApplicationDeploymentQueue::query()
             ->where('status', ApplicationDeploymentStatus::IN_PROGRESS->value)
-            ->get(['id', 'application_id']);
+            ->get(['id']);
 
         if ($stuckDeployments->isEmpty()) {
             return;
@@ -172,20 +176,31 @@ class Init extends Command
                 'finished_at' => $finishedAt,
             ]);
 
-        $affectedApplications = Application::query()
-            ->whereIn('id', $stuckDeployments->pluck('application_id')->unique()->all())
-            ->with('destination')
-            ->get();
+        echo "Marked {$stuckDeployments->count()} stuck deployments as failed\n";
+    }
 
-        foreach ($affectedApplications as $application) {
-            if (! $application->destination) {
-                continue;
-            }
+    private function resumeQueuedApplicationDeployments(): void
+    {
+        $queuedServerIds = ApplicationDeploymentQueue::query()
+            ->where('status', ApplicationDeploymentStatus::QUEUED->value)
+            ->whereNotNull('server_id')
+            ->pluck('server_id')
+            ->unique()
+            ->values();
 
-            queue_next_deployment($application);
+        if ($queuedServerIds->isEmpty()) {
+            return;
         }
 
-        echo "Marked {$stuckDeployments->count()} stuck deployments as failed\n";
+        $servers = Server::query()
+            ->whereIn('id', $queuedServerIds->all())
+            ->get();
+
+        foreach ($servers as $server) {
+            next_after_cancel($server);
+        }
+
+        echo "Rescanned queued deployments on {$servers->count()} servers\n";
     }
 
     private function pullTemplatesFromCDN()

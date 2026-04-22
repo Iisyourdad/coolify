@@ -209,6 +209,8 @@ test('app:init fails stale in-progress deployments and resumes queued follow-ups
         'deployment_uuid' => 'stale-deployment-uuid',
         'server_id' => $server->id,
         'destination_id' => $destination->id,
+        'commit' => 'stale-commit-sha',
+        'pull_request_id' => 0,
         'status' => ApplicationDeploymentStatus::IN_PROGRESS->value,
     ]);
 
@@ -217,6 +219,8 @@ test('app:init fails stale in-progress deployments and resumes queued follow-ups
         'deployment_uuid' => 'queued-deployment-uuid',
         'server_id' => $server->id,
         'destination_id' => $destination->id,
+        'commit' => 'queued-commit-sha',
+        'pull_request_id' => 0,
         'status' => ApplicationDeploymentStatus::QUEUED->value,
     ]);
 
@@ -228,6 +232,54 @@ test('app:init fails stale in-progress deployments and resumes queued follow-ups
     expect($staleDeployment->status)->toBe(ApplicationDeploymentStatus::FAILED->value)
         ->and($staleDeployment->finished_at)->not->toBeNull()
         ->and($queuedDeployment->status)->toBe(ApplicationDeploymentStatus::IN_PROGRESS->value);
+
+    Queue::assertPushed(ApplicationDeploymentJob::class, function (ApplicationDeploymentJob $job) use ($queuedDeployment) {
+        return $job->application_deployment_queue_id === $queuedDeployment->id;
+    });
+
+    Notification::assertNothingSent();
+});
+
+test('app:init resumes queued deployments even when nothing is running', function () {
+    $team = Team::factory()->create();
+    $server = Server::factory()->create([
+        'team_id' => $team->id,
+        'ip' => '127.0.0.1',
+    ]);
+    $destination = StandaloneDocker::where('server_id', $server->id)->firstOrFail();
+    $project = Project::factory()->create([
+        'team_id' => $team->id,
+    ]);
+    $environment = Environment::factory()->create([
+        'project_id' => $project->id,
+    ]);
+    $application = Application::forceCreate([
+        'name' => 'queue-only-recovery-app',
+        'git_repository' => 'https://example.com/queue-only-recovery.git',
+        'git_branch' => 'main',
+        'build_pack' => 'nixpacks',
+        'ports_exposes' => '3000',
+        'environment_id' => $environment->id,
+        'destination_id' => $destination->id,
+        'destination_type' => $destination->getMorphClass(),
+    ]);
+
+    $queuedDeployment = ApplicationDeploymentQueue::create([
+        'application_id' => $application->id,
+        'deployment_uuid' => 'queued-only-deployment-uuid',
+        'server_id' => $server->id,
+        'destination_id' => $destination->id,
+        'commit' => 'queued-only-commit-sha',
+        'pull_request_id' => 0,
+        'status' => ApplicationDeploymentStatus::QUEUED->value,
+    ]);
+
+    Artisan::call('app:init');
+
+    $queuedDeployment->refresh();
+
+    expect($queuedDeployment->status)->toBe(ApplicationDeploymentStatus::IN_PROGRESS->value)
+        ->and($queuedDeployment->finished_at)->toBeNull();
 
     Queue::assertPushed(ApplicationDeploymentJob::class, function (ApplicationDeploymentJob $job) use ($queuedDeployment) {
         return $job->application_deployment_queue_id === $queuedDeployment->id;
