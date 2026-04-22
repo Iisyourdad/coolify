@@ -7,6 +7,7 @@ use App\Models\ServiceApplication;
 use App\Services\EdgeProxyRemoteRouteService;
 use Illuminate\Config\Repository;
 use Illuminate\Container\Container;
+use Illuminate\Support\Collection;
 use Psr\Log\NullLogger;
 
 $originalLogger = null;
@@ -101,15 +102,38 @@ it('adds an insecure transport when an edge route falls back to the deployment p
 });
 
 it('does not warn when syncing service route without master domain routing enabled', function () {
-    $manager = new class extends EdgeProxyRemoteRouteService
+    $firstEdgeProxyServer = Mockery::mock(Server::class)->makePartial();
+    $firstEdgeProxyServer->id = 21;
+    $firstEdgeProxyServer->shouldReceive('proxyPath')->andReturn('/tmp/edge-21');
+
+    $secondEdgeProxyServer = Mockery::mock(Server::class)->makePartial();
+    $secondEdgeProxyServer->id = 22;
+    $secondEdgeProxyServer->shouldReceive('proxyPath')->andReturn('/tmp/edge-22');
+
+    $manager = new class($firstEdgeProxyServer, $secondEdgeProxyServer) extends EdgeProxyRemoteRouteService
     {
+        public array $calls = [];
+
+        public function __construct(private Server $firstEdgeProxyServer, private Server $secondEdgeProxyServer) {}
+
         protected function isMasterDomainRoutingEnabledForTeamId(?int $teamId): bool
         {
             return false;
         }
 
-        protected function resolveEdgeProxyServerByTeamId(?int $teamId): ?Server
+        protected function resolveEdgeProxyServersByTeamId(?int $teamId): Collection
         {
+            return collect([$this->firstEdgeProxyServer, $this->secondEdgeProxyServer]);
+        }
+
+        protected function runRemoteCommands(Server $server, array $commands, bool $throwError = true): ?string
+        {
+            $this->calls[] = [
+                'server_id' => $server->id,
+                'commands' => $commands,
+                'throw_error' => $throwError,
+            ];
+
             return null;
         }
     };
@@ -128,19 +152,47 @@ it('does not warn when syncing service route without master domain routing enabl
 
     $warnings = $manager->syncService($service);
 
-    expect($warnings)->toBe([]);
+    expect($warnings)->toBe([])
+        ->and($manager->calls)->toHaveCount(2)
+        ->and($manager->calls[0]['server_id'])->toBe(21)
+        ->and($manager->calls[0]['commands'][0])->toContain('/tmp/edge-21/dynamic/service-remote-service-no-master-router.yaml')
+        ->and($manager->calls[1]['server_id'])->toBe(22)
+        ->and($manager->calls[1]['commands'][0])->toContain('/tmp/edge-22/dynamic/service-remote-service-no-master-router.yaml');
 });
 
 it('does not warn when syncing application route without master domain routing enabled', function () {
-    $manager = new class extends EdgeProxyRemoteRouteService
+    $firstEdgeProxyServer = Mockery::mock(Server::class)->makePartial();
+    $firstEdgeProxyServer->id = 23;
+    $firstEdgeProxyServer->shouldReceive('proxyPath')->andReturn('/tmp/edge-23');
+
+    $secondEdgeProxyServer = Mockery::mock(Server::class)->makePartial();
+    $secondEdgeProxyServer->id = 24;
+    $secondEdgeProxyServer->shouldReceive('proxyPath')->andReturn('/tmp/edge-24');
+
+    $manager = new class($firstEdgeProxyServer, $secondEdgeProxyServer) extends EdgeProxyRemoteRouteService
     {
+        public array $calls = [];
+
+        public function __construct(private Server $firstEdgeProxyServer, private Server $secondEdgeProxyServer) {}
+
         protected function isMasterDomainRoutingEnabledForTeamId(?int $teamId): bool
         {
             return false;
         }
 
-        protected function resolveEdgeProxyServerByTeamId(?int $teamId): ?Server
+        protected function resolveEdgeProxyServersByTeamId(?int $teamId): Collection
         {
+            return collect([$this->firstEdgeProxyServer, $this->secondEdgeProxyServer]);
+        }
+
+        protected function runRemoteCommands(Server $server, array $commands, bool $throwError = true): ?string
+        {
+            $this->calls[] = [
+                'server_id' => $server->id,
+                'commands' => $commands,
+                'throw_error' => $throwError,
+            ];
+
             return null;
         }
     };
@@ -158,12 +210,29 @@ it('does not warn when syncing application route without master domain routing e
 
     $warnings = $manager->syncApplicationOnDeploymentServer($application, $deploymentServer);
 
-    expect($warnings)->toBe([]);
+    expect($warnings)->toBe([])
+        ->and($manager->calls)->toHaveCount(2)
+        ->and($manager->calls[0]['server_id'])->toBe(23)
+        ->and($manager->calls[0]['commands'][0])->toContain('/tmp/edge-23/dynamic/application-remote-application-no-master-router.yaml')
+        ->and($manager->calls[1]['server_id'])->toBe(24)
+        ->and($manager->calls[1]['commands'][0])->toContain('/tmp/edge-24/dynamic/application-remote-application-no-master-router.yaml');
 });
 
 it('returns warning when syncing application route with master domain routing enabled but no router is configured', function () {
-    $manager = new class extends EdgeProxyRemoteRouteService
+    $firstEdgeProxyServer = Mockery::mock(Server::class)->makePartial();
+    $firstEdgeProxyServer->id = 25;
+    $firstEdgeProxyServer->shouldReceive('proxyPath')->andReturn('/tmp/edge-25');
+
+    $secondEdgeProxyServer = Mockery::mock(Server::class)->makePartial();
+    $secondEdgeProxyServer->id = 26;
+    $secondEdgeProxyServer->shouldReceive('proxyPath')->andReturn('/tmp/edge-26');
+
+    $manager = new class($firstEdgeProxyServer, $secondEdgeProxyServer) extends EdgeProxyRemoteRouteService
     {
+        public array $calls = [];
+
+        public function __construct(private Server $firstEdgeProxyServer, private Server $secondEdgeProxyServer) {}
+
         protected function isMasterDomainRoutingEnabledForTeamId(?int $teamId): bool
         {
             return true;
@@ -171,6 +240,22 @@ it('returns warning when syncing application route with master domain routing en
 
         protected function resolveEdgeProxyServerByTeamId(?int $teamId): ?Server
         {
+            return null;
+        }
+
+        protected function resolveEdgeProxyServersByTeamId(?int $teamId): Collection
+        {
+            return collect([$this->firstEdgeProxyServer, $this->secondEdgeProxyServer]);
+        }
+
+        protected function runRemoteCommands(Server $server, array $commands, bool $throwError = true): ?string
+        {
+            $this->calls[] = [
+                'server_id' => $server->id,
+                'commands' => $commands,
+                'throw_error' => $throwError,
+            ];
+
             return null;
         }
     };
@@ -189,7 +274,76 @@ it('returns warning when syncing application route with master domain routing en
     $warnings = $manager->syncApplicationOnDeploymentServer($application, $deploymentServer);
 
     expect($warnings)->toHaveCount(1)
-        ->and($warnings[0])->toContain('no master domain router is configured for team 53');
+        ->and($warnings[0])->toContain('no master domain router is configured for team 53')
+        ->and($manager->calls)->toHaveCount(2)
+        ->and($manager->calls[0]['server_id'])->toBe(25)
+        ->and($manager->calls[0]['commands'][0])->toContain('/tmp/edge-25/dynamic/application-remote-application-missing-master-router.yaml')
+        ->and($manager->calls[1]['server_id'])->toBe(26)
+        ->and($manager->calls[1]['commands'][0])->toContain('/tmp/edge-26/dynamic/application-remote-application-missing-master-router.yaml');
+});
+
+it('cleans up stale application route files from former edge servers after syncing', function () {
+    $currentEdgeProxyServer = Mockery::mock(Server::class)->makePartial();
+    $currentEdgeProxyServer->id = 27;
+    $currentEdgeProxyServer->shouldReceive('proxyType')->andReturn('TRAEFIK');
+    $currentEdgeProxyServer->shouldReceive('proxyPath')->andReturn('/tmp/edge-27');
+
+    $formerEdgeProxyServer = Mockery::mock(Server::class)->makePartial();
+    $formerEdgeProxyServer->id = 28;
+    $formerEdgeProxyServer->shouldReceive('proxyPath')->andReturn('/tmp/edge-28');
+
+    $manager = new class($currentEdgeProxyServer, $formerEdgeProxyServer) extends EdgeProxyRemoteRouteService
+    {
+        public array $calls = [];
+
+        public function __construct(private Server $currentEdgeProxyServer, private Server $formerEdgeProxyServer) {}
+
+        protected function isMasterDomainRoutingEnabledForTeamId(?int $teamId): bool
+        {
+            return true;
+        }
+
+        protected function resolveEdgeProxyServerByTeamId(?int $teamId): ?Server
+        {
+            return $this->currentEdgeProxyServer;
+        }
+
+        protected function resolveEdgeProxyServersByTeamId(?int $teamId): Collection
+        {
+            return collect([$this->currentEdgeProxyServer, $this->formerEdgeProxyServer]);
+        }
+
+        protected function runRemoteCommands(Server $server, array $commands, bool $throwError = true): ?string
+        {
+            $this->calls[] = [
+                'server_id' => $server->id,
+                'commands' => $commands,
+                'throw_error' => $throwError,
+            ];
+
+            return null;
+        }
+    };
+
+    $deploymentServer = Mockery::mock(Server::class)->makePartial();
+    $deploymentServer->id = 29;
+
+    $application = new Application;
+    $application->uuid = 'application-switching-master';
+    $application->setRelation('environment', (object) [
+        'project' => (object) [
+            'team_id' => 54,
+        ],
+    ]);
+
+    $warnings = $manager->syncApplicationOnDeploymentServer($application, $deploymentServer);
+
+    expect($warnings)->toBe([])
+        ->and($manager->calls)->toHaveCount(2)
+        ->and($manager->calls[0]['server_id'])->toBe(27)
+        ->and($manager->calls[1]['server_id'])->toBe(28)
+        ->and($manager->calls[0]['commands'][0])->toContain('/tmp/edge-27/dynamic/application-remote-application-switching-master.yaml')
+        ->and($manager->calls[1]['commands'][0])->toContain('/tmp/edge-28/dynamic/application-remote-application-switching-master.yaml');
 });
 
 it('creates, updates, and deletes a stable edge route file per service uuid', function () {
@@ -1502,7 +1656,7 @@ it('deletes service edge route files from all team traefik servers', function ()
 
         public function __construct(private Server $firstEdgeProxyServer, private Server $secondEdgeProxyServer) {}
 
-        protected function resolveEdgeProxyServersByTeamId(?int $teamId): \Illuminate\Support\Collection
+        protected function resolveEdgeProxyServersByTeamId(?int $teamId): Collection
         {
             return collect([$this->firstEdgeProxyServer, $this->secondEdgeProxyServer]);
         }
@@ -1549,7 +1703,7 @@ it('deletes application edge route files from all team traefik servers', functio
 
         public function __construct(private Server $firstEdgeProxyServer, private Server $secondEdgeProxyServer) {}
 
-        protected function resolveEdgeProxyServersByTeamId(?int $teamId): \Illuminate\Support\Collection
+        protected function resolveEdgeProxyServersByTeamId(?int $teamId): Collection
         {
             return collect([$this->firstEdgeProxyServer, $this->secondEdgeProxyServer]);
         }
@@ -1591,7 +1745,7 @@ it('returns cleanup failure details when deleting service edge route files hits 
     {
         public function __construct(private Server $edgeProxyServer) {}
 
-        protected function resolveEdgeProxyServersByTeamId(?int $teamId): \Illuminate\Support\Collection
+        protected function resolveEdgeProxyServersByTeamId(?int $teamId): Collection
         {
             return collect([$this->edgeProxyServer]);
         }

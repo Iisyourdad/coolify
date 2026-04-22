@@ -5,6 +5,7 @@ use App\Models\Server;
 use App\Models\Service;
 use App\Services\EdgeProxyRemotePortForwardService;
 use Illuminate\Container\Container;
+use Illuminate\Support\Collection;
 use Psr\Log\NullLogger;
 use Symfony\Component\Yaml\Yaml;
 
@@ -256,6 +257,123 @@ it('warns and removes stale application edge port proxy when remote host is miss
         ->and($manager->calls[0]['commands'][0])->toContain('docker rm -f');
 });
 
+it('deletes service edge port proxy containers when no master router is configured', function () {
+    $firstEdgeProxyServer = Mockery::mock(Server::class)->makePartial();
+    $firstEdgeProxyServer->id = 33;
+
+    $secondEdgeProxyServer = Mockery::mock(Server::class)->makePartial();
+    $secondEdgeProxyServer->id = 34;
+
+    $manager = new class($firstEdgeProxyServer, $secondEdgeProxyServer) extends EdgeProxyRemotePortForwardService
+    {
+        public array $calls = [];
+
+        public function __construct(private Server $firstEdgeProxyServer, private Server $secondEdgeProxyServer) {}
+
+        protected function resolveEdgeProxyServerByTeamId(?int $teamId): ?Server
+        {
+            return null;
+        }
+
+        protected function resolveEdgeProxyServersByTeamId(?int $teamId): Collection
+        {
+            return collect([$this->firstEdgeProxyServer, $this->secondEdgeProxyServer]);
+        }
+
+        protected function runRemoteCommands(Server $server, array $commands, bool $throwError = true): ?string
+        {
+            $this->calls[] = [
+                'server_id' => $server->id,
+                'commands' => $commands,
+                'throw_error' => $throwError,
+            ];
+
+            return null;
+        }
+    };
+
+    $deploymentServer = Mockery::mock(Server::class)->makePartial();
+    $deploymentServer->id = 35;
+
+    $service = new Service;
+    $service->uuid = 'service-no-master-router';
+    $service->setRelation('server', $deploymentServer);
+    $service->setRelation('environment', (object) [
+        'project' => (object) ['team_id' => 67],
+    ]);
+
+    $warnings = $manager->syncService($service);
+
+    expect($warnings)->toBe([])
+        ->and($manager->calls)->toHaveCount(2)
+        ->and($manager->calls[0]['server_id'])->toBe(33)
+        ->and($manager->calls[0]['commands'][0])->toContain('service-service-no-master-router-edge-port-proxy')
+        ->and($manager->calls[1]['server_id'])->toBe(34)
+        ->and($manager->calls[1]['commands'][0])->toContain('service-service-no-master-router-edge-port-proxy');
+});
+
+it('cleans up stale application edge port proxy containers on former edge servers after syncing', function () {
+    $currentEdgeProxyServer = Mockery::mock(Server::class)->makePartial();
+    $currentEdgeProxyServer->id = 43;
+
+    $formerEdgeProxyServer = Mockery::mock(Server::class)->makePartial();
+    $formerEdgeProxyServer->id = 44;
+
+    $deploymentServer = Mockery::mock(Server::class)->makePartial();
+    $deploymentServer->id = 45;
+    $deploymentServer->ip = '10.8.0.65';
+
+    $manager = new class($currentEdgeProxyServer, $formerEdgeProxyServer) extends EdgeProxyRemotePortForwardService
+    {
+        public array $calls = [];
+
+        public function __construct(private Server $currentEdgeProxyServer, private Server $formerEdgeProxyServer) {}
+
+        protected function resolveEdgeProxyServerByTeamId(?int $teamId): ?Server
+        {
+            return $this->currentEdgeProxyServer;
+        }
+
+        protected function resolveEdgeProxyServersByTeamId(?int $teamId): Collection
+        {
+            return collect([$this->currentEdgeProxyServer, $this->formerEdgeProxyServer]);
+        }
+
+        protected function runRemoteCommands(Server $server, array $commands, bool $throwError = true): ?string
+        {
+            $this->calls[] = [
+                'server_id' => $server->id,
+                'commands' => $commands,
+                'throw_error' => $throwError,
+            ];
+
+            return null;
+        }
+    };
+
+    $application = new Application;
+    $application->uuid = 'application-switching-master';
+    $application->build_pack = 'nixpacks';
+    $application->ports_mappings = '25565:25565';
+    $application->setRelation('destination', (object) [
+        'server' => $deploymentServer,
+    ]);
+    $application->setRelation('environment', (object) [
+        'project' => (object) ['team_id' => 68],
+    ]);
+
+    $warnings = $manager->syncApplication($application);
+
+    expect($warnings)->toBe([])
+        ->and($manager->calls)->toHaveCount(2)
+        ->and($manager->calls[0]['server_id'])->toBe(43)
+        ->and($manager->calls[1]['server_id'])->toBe(44)
+        ->and(collect($manager->calls[0]['commands'])->contains(
+            fn (string $command) => str_contains($command, 'application-application-switching-master-edge-port-proxy')
+        ))->toBeTrue()
+        ->and($manager->calls[1]['commands'][0])->toContain('application-application-switching-master-edge-port-proxy');
+});
+
 it('skips reserved edge ports while keeping other published application ports', function () {
     $edgeProxyServer = Mockery::mock(Server::class)->makePartial();
     $edgeProxyServer->id = 41;
@@ -348,7 +466,7 @@ it('deletes service edge port proxy containers from all team traefik servers', f
 
         public function __construct(private Server $firstEdgeProxyServer, private Server $secondEdgeProxyServer) {}
 
-        protected function resolveEdgeProxyServersByTeamId(?int $teamId): \Illuminate\Support\Collection
+        protected function resolveEdgeProxyServersByTeamId(?int $teamId): Collection
         {
             return collect([$this->firstEdgeProxyServer, $this->secondEdgeProxyServer]);
         }
@@ -393,7 +511,7 @@ it('deletes application edge port proxy containers from all team traefik servers
 
         public function __construct(private Server $firstEdgeProxyServer, private Server $secondEdgeProxyServer) {}
 
-        protected function resolveEdgeProxyServersByTeamId(?int $teamId): \Illuminate\Support\Collection
+        protected function resolveEdgeProxyServersByTeamId(?int $teamId): Collection
         {
             return collect([$this->firstEdgeProxyServer, $this->secondEdgeProxyServer]);
         }
@@ -434,7 +552,7 @@ it('returns cleanup failure details when deleting application edge port proxy hi
     {
         public function __construct(private Server $edgeProxyServer) {}
 
-        protected function resolveEdgeProxyServersByTeamId(?int $teamId): \Illuminate\Support\Collection
+        protected function resolveEdgeProxyServersByTeamId(?int $teamId): Collection
         {
             return collect([$this->edgeProxyServer]);
         }
@@ -468,7 +586,7 @@ it('treats missing edge port proxy containers as already cleaned up', function (
     {
         public function __construct(private Server $edgeProxyServer) {}
 
-        protected function resolveEdgeProxyServersByTeamId(?int $teamId): \Illuminate\Support\Collection
+        protected function resolveEdgeProxyServersByTeamId(?int $teamId): Collection
         {
             return collect([$this->edgeProxyServer]);
         }

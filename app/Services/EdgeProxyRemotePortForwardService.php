@@ -17,16 +17,24 @@ class EdgeProxyRemotePortForwardService
 
     public function syncService(Service $service): array
     {
+        $teamId = $this->extractServiceTeamId($service);
         $deploymentServer = $this->resolveServiceDeploymentServer($service);
         if (! $deploymentServer instanceof Server) {
             return [];
         }
 
-        return $this->syncServiceWithServers(
+        $edgeProxyServer = $this->resolveEdgeProxyServerByTeamId($teamId);
+        if (! $edgeProxyServer instanceof Server) {
+            return $this->deleteService($service);
+        }
+
+        $warnings = $this->syncServiceWithServers(
             $service,
-            $this->resolveEdgeProxyServerByTeamId($this->extractServiceTeamId($service)),
+            $edgeProxyServer,
             $deploymentServer
         );
+
+        return array_merge($warnings, $this->cleanupServicePortProxies($service, $edgeProxyServer));
     }
 
     public function syncServiceWithServers(Service $service, ?Server $edgeProxyServer, Server $deploymentServer): array
@@ -42,25 +50,41 @@ class EdgeProxyRemotePortForwardService
 
     public function syncApplication(Application $application): array
     {
+        $teamId = $this->extractApplicationTeamId($application);
         $deploymentServer = $this->resolveApplicationDeploymentServer($application);
         if (! $deploymentServer instanceof Server) {
             return [];
         }
 
-        return $this->syncApplicationWithServers(
+        $edgeProxyServer = $this->resolveEdgeProxyServerByTeamId($teamId);
+        if (! $edgeProxyServer instanceof Server) {
+            return $this->deleteApplication($application);
+        }
+
+        $warnings = $this->syncApplicationWithServers(
             $application,
-            $this->resolveEdgeProxyServerByTeamId($this->extractApplicationTeamId($application)),
+            $edgeProxyServer,
             $deploymentServer
         );
+
+        return array_merge($warnings, $this->cleanupApplicationPortProxies($application, $edgeProxyServer));
     }
 
     public function syncApplicationOnDeploymentServer(Application $application, Server $deploymentServer): array
     {
-        return $this->syncApplicationWithServers(
+        $teamId = $this->extractApplicationTeamId($application);
+        $edgeProxyServer = $this->resolveEdgeProxyServerByTeamId($teamId);
+        if (! $edgeProxyServer instanceof Server) {
+            return $this->deleteApplication($application);
+        }
+
+        $warnings = $this->syncApplicationWithServers(
             $application,
-            $this->resolveEdgeProxyServerByTeamId($this->extractApplicationTeamId($application)),
+            $edgeProxyServer,
             $deploymentServer
         );
+
+        return array_merge($warnings, $this->cleanupApplicationPortProxies($application, $edgeProxyServer));
     }
 
     public function syncApplicationWithServers(Application $application, ?Server $edgeProxyServer, Server $deploymentServer): array
@@ -98,6 +122,32 @@ class EdgeProxyRemotePortForwardService
     public function deleteApplicationWithServer(Application $application, Server $edgeProxyServer): array
     {
         return $this->deleteResourcePortProxyWithResult($edgeProxyServer, 'application', $application->uuid);
+    }
+
+    private function cleanupServicePortProxies(Service $service, ?Server $currentEdgeProxyServer = null): array
+    {
+        if (! $currentEdgeProxyServer instanceof Server) {
+            return $this->deleteService($service);
+        }
+
+        return $this->resolveEdgeProxyServersByTeamId($this->extractServiceTeamId($service))
+            ->reject(fn (Server $edgeProxyServer) => $edgeProxyServer->id === $currentEdgeProxyServer->id)
+            ->flatMap(fn (Server $edgeProxyServer) => $this->deleteServiceWithServer($service, $edgeProxyServer))
+            ->values()
+            ->all();
+    }
+
+    private function cleanupApplicationPortProxies(Application $application, ?Server $currentEdgeProxyServer = null): array
+    {
+        if (! $currentEdgeProxyServer instanceof Server) {
+            return $this->deleteApplication($application);
+        }
+
+        return $this->resolveEdgeProxyServersByTeamId($this->extractApplicationTeamId($application))
+            ->reject(fn (Server $edgeProxyServer) => $edgeProxyServer->id === $currentEdgeProxyServer->id)
+            ->flatMap(fn (Server $edgeProxyServer) => $this->deleteApplicationWithServer($application, $edgeProxyServer))
+            ->values()
+            ->all();
     }
 
     protected function runRemoteCommands(Server $server, array $commands, bool $throwError = true): ?string
@@ -821,5 +871,4 @@ EOF;
 
         return null;
     }
-
 }

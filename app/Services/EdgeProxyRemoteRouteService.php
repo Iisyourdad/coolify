@@ -32,7 +32,7 @@ class EdgeProxyRemoteRouteService
         }
 
         if (! $this->isMasterDomainRoutingEnabledForTeamId($teamId)) {
-            return [];
+            return $this->cleanupServiceRouteFiles($service);
         }
 
         $edgeProxyServer = $this->resolveEdgeProxyServerByTeamId($teamId);
@@ -41,13 +41,15 @@ class EdgeProxyRemoteRouteService
             if (! is_null($warning)) {
                 $this->logWarning($warning);
 
-                return [$warning];
+                return array_merge([$warning], $this->cleanupServiceRouteFiles($service));
             }
 
-            return [];
+            return $this->cleanupServiceRouteFiles($service);
         }
 
-        return $this->syncServiceWithServers($service, $edgeProxyServer, $deploymentServer);
+        $warnings = $this->syncServiceWithServers($service, $edgeProxyServer, $deploymentServer);
+
+        return array_merge($warnings, $this->cleanupServiceRouteFiles($service, $edgeProxyServer));
     }
 
     public function syncServiceWithServers(Service $service, Server $edgeProxyServer, Server $deploymentServer): array
@@ -218,7 +220,7 @@ class EdgeProxyRemoteRouteService
         }
 
         if (! $this->isMasterDomainRoutingEnabledForTeamId($teamId)) {
-            return [];
+            return $this->cleanupApplicationRouteFiles($application);
         }
 
         $edgeProxyServer = $this->resolveEdgeProxyServerByTeamId($teamId);
@@ -227,20 +229,22 @@ class EdgeProxyRemoteRouteService
             if (! is_null($warning)) {
                 $this->logWarning($warning);
 
-                return [$warning];
+                return array_merge([$warning], $this->cleanupApplicationRouteFiles($application));
             }
 
-            return [];
+            return $this->cleanupApplicationRouteFiles($application);
         }
 
-        return $this->syncApplicationWithServers($application, $edgeProxyServer, $deploymentServer);
+        $warnings = $this->syncApplicationWithServers($application, $edgeProxyServer, $deploymentServer);
+
+        return array_merge($warnings, $this->cleanupApplicationRouteFiles($application, $edgeProxyServer));
     }
 
     public function syncApplicationOnDeploymentServer(Application $application, Server $deploymentServer): array
     {
         $teamId = $this->extractApplicationTeamId($application);
         if (! $this->isMasterDomainRoutingEnabledForTeamId($teamId)) {
-            return [];
+            return $this->cleanupApplicationRouteFiles($application);
         }
 
         $edgeProxyServer = $this->resolveEdgeProxyServerByTeamId($teamId);
@@ -249,13 +253,15 @@ class EdgeProxyRemoteRouteService
             if (! is_null($warning)) {
                 $this->logWarning($warning);
 
-                return [$warning];
+                return array_merge([$warning], $this->cleanupApplicationRouteFiles($application));
             }
 
-            return [];
+            return $this->cleanupApplicationRouteFiles($application);
         }
 
-        return $this->syncApplicationWithServers($application, $edgeProxyServer, $deploymentServer);
+        $warnings = $this->syncApplicationWithServers($application, $edgeProxyServer, $deploymentServer);
+
+        return array_merge($warnings, $this->cleanupApplicationRouteFiles($application, $edgeProxyServer));
     }
 
     public function syncApplicationWithServers(Application $application, Server $edgeProxyServer, Server $deploymentServer): array
@@ -463,6 +469,32 @@ class EdgeProxyRemoteRouteService
                 $exception->getMessage()
             )];
         }
+    }
+
+    private function cleanupServiceRouteFiles(Service $service, ?Server $currentEdgeProxyServer = null): array
+    {
+        if (! $currentEdgeProxyServer instanceof Server) {
+            return $this->deleteService($service);
+        }
+
+        return $this->resolveEdgeProxyServersByTeamId($this->extractServiceTeamId($service))
+            ->reject(fn (Server $edgeProxyServer) => $edgeProxyServer->id === $currentEdgeProxyServer->id)
+            ->flatMap(fn (Server $edgeProxyServer) => $this->deleteServiceWithServer($service, $edgeProxyServer))
+            ->values()
+            ->all();
+    }
+
+    private function cleanupApplicationRouteFiles(Application $application, ?Server $currentEdgeProxyServer = null): array
+    {
+        if (! $currentEdgeProxyServer instanceof Server) {
+            return $this->deleteApplication($application);
+        }
+
+        return $this->resolveEdgeProxyServersByTeamId($this->extractApplicationTeamId($application))
+            ->reject(fn (Server $edgeProxyServer) => $edgeProxyServer->id === $currentEdgeProxyServer->id)
+            ->flatMap(fn (Server $edgeProxyServer) => $this->deleteApplicationWithServer($application, $edgeProxyServer))
+            ->values()
+            ->all();
     }
 
     public function generateTraefikConfig(string $serviceUuid, array $routes): array
@@ -1522,5 +1554,4 @@ class EdgeProxyRemoteRouteService
     {
         return str_contains($value, '`') || preg_match('/[\r\n]/', $value) === 1;
     }
-
 }
