@@ -19,7 +19,13 @@ class ConfirmServerUnreachableJob implements ShouldBeEncrypted, ShouldBeUnique, 
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public $tries = 1;
+    private const CONFIRMATION_ATTEMPTS = 3;
+
+    private const CONFIRMATION_RETRY_DELAY = 5;
+
+    public $tries = self::CONFIRMATION_ATTEMPTS;
+
+    public $maxExceptions = 1;
 
     public $timeout = 45;
 
@@ -61,19 +67,26 @@ class ConfirmServerUnreachableJob implements ShouldBeEncrypted, ShouldBeUnique, 
     public function handle(): void
     {
         try {
-            $failedChecks = 0;
+            if ($this->server->serverStatus() === true) {
+                $this->clearDebounceLock();
 
-            for ($i = 0; $i < 3; $i++) {
-                if ($this->server->serverStatus() === false) {
-                    $failedChecks++;
-                }
-
-                sleep(5);
+                return;
             }
 
-            if ($failedChecks === 3 && ! $this->server->unreachable_notification_sent) {
-                $this->server->sendUnreachableNotification();
+            if ($this->server->unreachable_notification_sent) {
+                $this->clearDebounceLock();
+
+                return;
             }
+
+            if ($this->attempts() < self::CONFIRMATION_ATTEMPTS) {
+                $this->release(self::CONFIRMATION_RETRY_DELAY);
+
+                return;
+            }
+
+            $this->server->sendUnreachableNotification();
+            $this->clearDebounceLock();
         } catch (\Throwable $exception) {
             Log::warning('ConfirmServerUnreachableJob failed', [
                 'server_id' => $this->server->id,
@@ -83,5 +96,10 @@ class ConfirmServerUnreachableJob implements ShouldBeEncrypted, ShouldBeUnique, 
 
             throw $exception;
         }
+    }
+
+    private function clearDebounceLock(): void
+    {
+        Cache::forget(self::debounceKey($this->server));
     }
 }

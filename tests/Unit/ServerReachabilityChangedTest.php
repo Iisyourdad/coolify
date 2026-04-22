@@ -3,7 +3,11 @@
 use App\Jobs\ConfirmServerUnreachableJob;
 use App\Models\Server;
 use App\Models\Team;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
+use Tests\TestCase;
+
+uses(TestCase::class, RefreshDatabase::class);
 
 beforeEach(function () {
     Queue::fake();
