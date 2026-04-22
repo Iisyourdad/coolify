@@ -6,6 +6,7 @@ use App\Enums\ActivityTypes;
 use App\Enums\ApplicationDeploymentStatus;
 use App\Jobs\CheckHelperImageJob;
 use App\Jobs\PullChangelog;
+use App\Models\Application;
 use App\Models\ApplicationDeploymentQueue;
 use App\Models\Environment;
 use App\Models\InstanceSettings;
@@ -33,8 +34,11 @@ class Init extends Command
 
     public function handle()
     {
-        Artisan::call('optimize:clear');
-        Artisan::call('optimize');
+        // Skip optimize warmup under tests; it can reset the in-memory app and break DB-backed assertions.
+        if (! app()->runningUnitTests()) {
+            Artisan::call('optimize:clear');
+            Artisan::call('optimize');
+        }
 
         try {
             $this->pullTemplatesFromCDN();
@@ -92,16 +96,7 @@ class Init extends Command
             echo "Continuing with initialization - cleanup errors will not prevent Coolify from starting\n";
         }
         try {
-            $updatedCount = ApplicationDeploymentQueue::whereIn('status', [
-                ApplicationDeploymentStatus::IN_PROGRESS->value,
-                ApplicationDeploymentStatus::QUEUED->value,
-            ])->update([
-                'status' => ApplicationDeploymentStatus::FAILED->value,
-            ]);
-
-            if ($updatedCount > 0) {
-                echo "Marked {$updatedCount} stuck deployments as failed\n";
-            }
+            $this->cleanupStuckApplicationDeployments();
         } catch (\Throwable $e) {
             echo "Could not cleanup inprogress deployments: {$e->getMessage()}\n";
         }
@@ -157,6 +152,40 @@ class Init extends Command
     private function pullHelperImage()
     {
         CheckHelperImageJob::dispatch();
+    }
+
+    private function cleanupStuckApplicationDeployments(): void
+    {
+        $stuckDeployments = ApplicationDeploymentQueue::query()
+            ->where('status', ApplicationDeploymentStatus::IN_PROGRESS->value)
+            ->get(['id', 'application_id']);
+
+        if ($stuckDeployments->isEmpty()) {
+            return;
+        }
+
+        $finishedAt = Carbon::now();
+
+        ApplicationDeploymentQueue::whereIn('id', $stuckDeployments->pluck('id')->all())
+            ->update([
+                'status' => ApplicationDeploymentStatus::FAILED->value,
+                'finished_at' => $finishedAt,
+            ]);
+
+        $affectedApplications = Application::query()
+            ->whereIn('id', $stuckDeployments->pluck('application_id')->unique()->all())
+            ->with('destination')
+            ->get();
+
+        foreach ($affectedApplications as $application) {
+            if (! $application->destination) {
+                continue;
+            }
+
+            queue_next_deployment($application);
+        }
+
+        echo "Marked {$stuckDeployments->count()} stuck deployments as failed\n";
     }
 
     private function pullTemplatesFromCDN()
@@ -253,7 +282,7 @@ class Init extends Command
                             'save_s3' => false,
                             'frequency' => '0 0 * * *',
                             'database_id' => $database->id,
-                            'database_type' => \App\Models\StandalonePostgresql::class,
+                            'database_type' => StandalonePostgresql::class,
                             'team_id' => 0,
                         ]);
                     }
