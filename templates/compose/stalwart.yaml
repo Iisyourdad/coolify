@@ -1,0 +1,29 @@
+# documentation: https://stalwart.email/docs/install/platform/docker/
+# slogan: Modern all-in-one mail and collaboration server.
+# category: email
+# tags: stalwart,email,mail,smtp,imap,pop3,jmap,calendar,contacts,groupware
+# logo: svgs/stalwart.png
+# port: 8080
+
+services:
+  stalwart:
+    image: stalwartlabs/stalwart:v0.16
+    restart: unless-stopped
+    environment:
+      - SERVICE_URL_STALWART_8080
+      - TZ=${TZ:-America/Chicago}
+      - STALWART_RECOVERY_ADMIN=admin:${SERVICE_PASSWORD_64_STALWART}
+    ports:
+      - "${STALWART_SMTP_PORT:-25}:25"
+      - "${STALWART_SUBMISSIONS_PORT:-465}:465"
+      - "${STALWART_SUBMISSION_PORT:-587}:587"
+      - "${STALWART_IMAP_PORT:-143}:143"
+      - "${STALWART_IMAPS_PORT:-993}:993"
+      - "${STALWART_POP3_PORT:-110}:110"
+      - "${STALWART_POP3S_PORT:-995}:995"
+      - "${STALWART_MANAGESIEVE_PORT:-4190}:4190"
+    volumes:
+      - stalwart-data:/opt/stalwart
+
+volumes:
+  stalwart-data:
