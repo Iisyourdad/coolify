@@ -4,6 +4,7 @@ namespace App\Actions\Service;
 
 use App\Actions\Server\CleanupDocker;
 use App\Exceptions\EdgeProxyCleanupPendingException;
+use App\Models\Server;
 use App\Models\Service;
 use App\Services\EdgeProxyRemotePortForwardService;
 use App\Services\EdgeProxyRemoteRouteService;
@@ -15,10 +16,10 @@ class DeleteService
 
     public function handle(Service $service, bool $deleteVolumes, bool $deleteConnectedNetworks, bool $deleteConfigurations, bool $dockerCleanup)
     {
-        $server = data_get($service, 'server');
+        $server = $this->resolveServer($service);
 
         try {
-            if ($deleteVolumes && $server->isFunctional()) {
+            if ($deleteVolumes && $server?->isFunctional()) {
                 $storagesToDelete = collect([]);
 
                 $service->environment_variables()->delete();
@@ -50,11 +51,13 @@ class DeleteService
                 }
             }
 
-            if ($deleteConnectedNetworks) {
-                $service->deleteConnectedNetworks();
+            if ($deleteConnectedNetworks && $server instanceof Server) {
+                $this->deleteConnectedNetworks($service, $server);
             }
 
-            $this->runRemoteCommands(["docker rm -f $service->uuid"], $server, throwError: false);
+            if ($server instanceof Server) {
+                $this->runRemoteCommands(["docker rm -f $service->uuid"], $server, throwError: false);
+            }
         } catch (\Throwable $exception) {
             throw new \RuntimeException($exception->getMessage(), previous: $exception);
         }
@@ -64,8 +67,8 @@ class DeleteService
             throw new EdgeProxyCleanupPendingException('service', $service->uuid, $edgeCleanupFailures);
         }
 
-        if ($deleteConfigurations) {
-            $service->deleteConfigurations();
+        if ($deleteConfigurations && $server instanceof Server) {
+            $this->deleteConfigurations($service, $server);
         }
         foreach ($service->applications()->get() as $application) {
             $application->forceDelete();
@@ -79,7 +82,7 @@ class DeleteService
         $service->tags()->detach();
         $service->forceDelete();
 
-        if ($dockerCleanup) {
+        if ($dockerCleanup && $server instanceof Server) {
             CleanupDocker::dispatch($server, false, false);
         }
     }
@@ -87,6 +90,31 @@ class DeleteService
     protected function runRemoteCommands(array $commands, $server, bool $throwError = true): ?string
     {
         return instant_remote_process($commands, $server, $throwError);
+    }
+
+    protected function resolveServer(Service $service): ?Server
+    {
+        $server = data_get($service, 'server') ?? data_get($service, 'destination.server');
+
+        return $server instanceof Server ? $server : null;
+    }
+
+    protected function deleteConnectedNetworks(Service $service, Server $server): void
+    {
+        $this->runRemoteCommands([
+            "docker network disconnect {$service->uuid} coolify-proxy",
+            "docker network rm {$service->uuid}",
+        ], $server, false);
+    }
+
+    protected function deleteConfigurations(Service $service, Server $server): void
+    {
+        $workdir = $service->workdir();
+        if (! str($workdir)->endsWith($service->uuid)) {
+            return;
+        }
+
+        $this->runRemoteCommands(['rm -rf '.$workdir], $server, false);
     }
 
     protected function cleanupEdgeProxyState(Service $service): array

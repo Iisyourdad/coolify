@@ -2,10 +2,11 @@
 
 use App\Actions\Service\DeleteService;
 use App\Exceptions\EdgeProxyCleanupPendingException;
-use App\Models\Service;
 use App\Models\Server;
+use App\Models\Service;
 use App\Services\EdgeProxyRemotePortForwardService;
 use App\Services\EdgeProxyRemoteRouteService;
+use Illuminate\Support\Collection;
 
 it('keeps service pending deletion when edge route cleanup fails', function () {
     $server = Mockery::mock(Server::class)->makePartial();
@@ -106,6 +107,43 @@ it('force deletes service after edge cleanup succeeds', function () {
     $action->handle($service, false, false, false, false);
 });
 
+it('force deletes orphaned service metadata when server is missing', function () {
+    $service = Mockery::mock(Service::class)->makePartial();
+    $service->uuid = 'service-missing-server-cleanup';
+    $service->setRelation('server', null);
+    $service->setRelation('destination', null);
+    $service->setRelation('scheduled_tasks', collect());
+    $service->shouldReceive('applications->get')->once()->andReturn(collect());
+    $service->shouldReceive('databases->get')->once()->andReturn(collect());
+    $service->shouldReceive('tags->detach')->once();
+    $service->shouldReceive('forceDelete')->once();
+
+    $routeService = Mockery::mock(EdgeProxyRemoteRouteService::class);
+    $routeService->shouldReceive('deleteService')->once()->with($service)->andReturn([]);
+
+    $portForwardService = Mockery::mock(EdgeProxyRemotePortForwardService::class);
+    $portForwardService->shouldReceive('deleteService')->once()->with($service)->andReturn([]);
+
+    app()->instance(EdgeProxyRemoteRouteService::class, $routeService);
+    app()->instance(EdgeProxyRemotePortForwardService::class, $portForwardService);
+
+    $action = new class extends DeleteService
+    {
+        public array $commands = [];
+
+        protected function runRemoteCommands(array $commands, $server, bool $throwError = true): ?string
+        {
+            $this->commands[] = compact('commands', 'server', 'throwError');
+
+            return null;
+        }
+    };
+
+    $action->handle($service, true, true, true, true);
+
+    expect($action->commands)->toBe([]);
+});
+
 it('keeps service pending deletion when concrete edge route cleanup hits an ssh error', function () {
     $server = Mockery::mock(Server::class)->makePartial();
     $server->id = 11;
@@ -128,7 +166,7 @@ it('keeps service pending deletion when concrete edge route cleanup hits an ssh 
     {
         public function __construct(private Server $edgeProxyServer) {}
 
-        protected function resolveEdgeProxyServersByTeamId(?int $teamId): \Illuminate\Support\Collection
+        protected function resolveEdgeProxyServersByTeamId(?int $teamId): Collection
         {
             return collect([$this->edgeProxyServer]);
         }
@@ -141,7 +179,7 @@ it('keeps service pending deletion when concrete edge route cleanup hits an ssh 
 
     $portForwardService = new class extends EdgeProxyRemotePortForwardService
     {
-        protected function resolveEdgeProxyServersByTeamId(?int $teamId): \Illuminate\Support\Collection
+        protected function resolveEdgeProxyServersByTeamId(?int $teamId): Collection
         {
             return collect();
         }
