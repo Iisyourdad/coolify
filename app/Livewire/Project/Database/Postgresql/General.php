@@ -71,9 +71,11 @@ class General extends Component
     public function getListeners()
     {
         $userId = Auth::id();
+        $teamId = Auth::user()->currentTeam()->id;
 
         return [
-            "echo-private:user.{$userId},DatabaseStatusChanged" => '$refresh',
+            "echo-private:user.{$userId},DatabaseStatusChanged" => 'refresh',
+            "echo-private:team.{$teamId},ServiceChecked" => 'refresh',
             'save_init_script',
             'delete_init_script',
         ];
@@ -84,15 +86,21 @@ class General extends Component
         return [
             'name' => ValidationPatterns::nameRules(),
             'description' => ValidationPatterns::descriptionRules(),
-            'postgresUser' => 'required',
-            'postgresPassword' => 'required',
-            'postgresDb' => 'required',
+            'postgresUser' => ValidationPatterns::databaseIdentifierRules(
+                enforcePattern: $this->postgresUser !== $this->database->postgres_user,
+            ),
+            'postgresPassword' => ValidationPatterns::databasePasswordRules(
+                enforcePattern: $this->postgresPassword !== $this->database->postgres_password,
+            ),
+            'postgresDb' => ValidationPatterns::databaseIdentifierRules(
+                enforcePattern: $this->postgresDb !== $this->database->postgres_db,
+            ),
             'postgresInitdbArgs' => 'nullable',
             'postgresHostAuthMethod' => 'nullable',
             'postgresConf' => 'nullable',
             'initScripts' => 'nullable',
             'image' => 'required',
-            'portsMappings' => 'nullable',
+            'portsMappings' => ValidationPatterns::portMappingRules(),
             'isPublic' => 'nullable|boolean',
             'publicPort' => 'nullable|integer|min:1|max:65535',
             'publicPortTimeout' => 'nullable|integer|min:1',
@@ -107,11 +115,12 @@ class General extends Component
     {
         return array_merge(
             ValidationPatterns::combinedMessages(),
+            ValidationPatterns::portMappingMessages(),
             [
                 'name.required' => 'The Name field is required.',
-                'postgresUser.required' => 'The Postgres User field is required.',
-                'postgresPassword.required' => 'The Postgres Password field is required.',
-                'postgresDb.required' => 'The Postgres Database field is required.',
+                ...ValidationPatterns::databaseIdentifierMessages('postgresUser', 'Postgres User'),
+                ...ValidationPatterns::databasePasswordMessages('postgresPassword', 'Postgres Password'),
+                ...ValidationPatterns::databaseIdentifierMessages('postgresDb', 'Postgres Database'),
                 'image.required' => 'The Docker Image field is required.',
                 'publicPort.integer' => 'The Public Port must be an integer.',
                 'publicPort.min' => 'The Public Port must be at least 1.',
@@ -349,9 +358,14 @@ class General extends Component
 
         if ($oldScript && $oldScript['filename'] !== $script['filename']) {
             try {
-                // Validate and escape filename to prevent command injection
-                validateShellSafePath($oldScript['filename'], 'init script filename');
-                $old_file_path = "$configuration_dir/docker-entrypoint-initdb.d/{$oldScript['filename']}";
+                // New filename is user-supplied — must be safe before accepting the rename.
+                validateFilenameSafe($script['filename'], 'init script filename');
+
+                // Old filename may be a legacy value written before this validation existed.
+                // basename() scopes the rm to the initdb.d directory; escapeshellarg() contains
+                // any remaining shell-metachars. No validator — don't block cleanup of legacy rows.
+                $old_filename = basename($oldScript['filename']);
+                $old_file_path = "$configuration_dir/docker-entrypoint-initdb.d/{$old_filename}";
                 $escapedOldPath = escapeshellarg($old_file_path);
                 $delete_command = "rm -f {$escapedOldPath}";
                 instant_remote_process([$delete_command], $this->server);
@@ -395,9 +409,11 @@ class General extends Component
             $configuration_dir = database_configuration_dir().'/'.$container_name;
 
             try {
-                // Validate and escape filename to prevent command injection
-                validateShellSafePath($script['filename'], 'init script filename');
-                $file_path = "$configuration_dir/docker-entrypoint-initdb.d/{$script['filename']}";
+                // Allow deletion of legacy rows with unsafe filenames so operators can clean up.
+                // basename() scopes the rm to the initdb.d directory; escapeshellarg() keeps the
+                // shell invocation safe regardless of the stored value.
+                $safe_filename = basename($script['filename']);
+                $file_path = "$configuration_dir/docker-entrypoint-initdb.d/{$safe_filename}";
                 $escapedPath = escapeshellarg($file_path);
 
                 $command = "rm -f {$escapedPath}";
@@ -434,8 +450,8 @@ class General extends Component
         ]);
 
         try {
-            // Validate filename to prevent command injection
-            validateShellSafePath($this->new_filename, 'init script filename');
+            // Validate filename to prevent path traversal and command injection
+            validateFilenameSafe($this->new_filename, 'init script filename');
         } catch (Exception $e) {
             $this->dispatch('error', $e->getMessage());
 
@@ -469,6 +485,9 @@ class General extends Component
         try {
             $this->authorize('update', $this->database);
 
+            if ($this->portsMappings) {
+                $this->portsMappings = str($this->portsMappings)->replace(' ', '')->trim()->toString();
+            }
             if (str($this->publicPort)->isEmpty()) {
                 $this->publicPort = null;
             }
@@ -483,5 +502,11 @@ class General extends Component
                 $this->dispatch('configurationChanged');
             }
         }
+    }
+
+    public function refresh(): void
+    {
+        $this->database->refresh();
+        $this->syncData();
     }
 }

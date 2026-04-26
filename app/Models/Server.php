@@ -136,7 +136,7 @@ class Server extends BaseModel
                     $payload['ip_previous'] = $server->getOriginal('ip');
                 }
             }
-            $server->forceFill($payload);
+            $server->fill($payload);
         });
         static::saved(function ($server) {
             if ($server->wasChanged('private_key_id') || $server->privateKey?->isDirty()) {
@@ -144,46 +144,54 @@ class Server extends BaseModel
             }
         });
         static::created(function ($server) {
-            ServerSetting::forceCreate([
+            ServerSetting::create([
                 'server_id' => $server->id,
             ]);
             if ($server->id === 0) {
                 if ($server->isSwarm()) {
-                    SwarmDocker::forceCreate([
+                    (new SwarmDocker)->forceFill([
                         'id' => 0,
                         'name' => 'coolify',
                         'network' => 'coolify-overlay',
                         'server_id' => $server->id,
-                    ]);
+                    ])->save();
                 } else {
-                    StandaloneDocker::forceCreate([
-                        'id' => 0,
-                        'name' => 'coolify',
-                        'network' => 'coolify',
-                        'server_id' => $server->id,
-                    ]);
+                    (new StandaloneDocker)->forceFill($server->defaultStandaloneDockerAttributes(id: 0))->saveQuietly();
                 }
             } else {
                 if ($server->isSwarm()) {
-                    SwarmDocker::forceCreate([
+                    SwarmDocker::create([
                         'name' => 'coolify-overlay',
                         'network' => 'coolify-overlay',
                         'server_id' => $server->id,
                     ]);
                 } else {
                     $standaloneDocker = new StandaloneDocker;
-                    $standaloneDocker->forceFill([
-                        'name' => 'coolify',
-                        'uuid' => (string) new Cuid2,
-                        'network' => 'coolify',
-                        'server_id' => $server->id,
-                    ]);
+                    $standaloneDocker->forceFill($server->defaultStandaloneDockerAttributes());
                     $standaloneDocker->saveQuietly();
                 }
             }
             if (! isset($server->proxy->redirect_enabled)) {
                 $server->proxy->redirect_enabled = true;
             }
+
+            // Create predefined server shared variables
+            SharedEnvironmentVariable::create([
+                'key' => 'COOLIFY_SERVER_UUID',
+                'value' => $server->uuid,
+                'type' => 'server',
+                'server_id' => $server->id,
+                'team_id' => $server->team_id,
+                'is_literal' => true,
+            ]);
+            SharedEnvironmentVariable::create([
+                'key' => 'COOLIFY_SERVER_NAME',
+                'value' => $server->name,
+                'type' => 'server',
+                'server_id' => $server->id,
+                'team_id' => $server->team_id,
+                'is_literal' => true,
+            ]);
         });
         static::retrieved(function ($server) {
             if (! isset($server->proxy->redirect_enabled)) {
@@ -266,6 +274,7 @@ class Server extends BaseModel
         'detected_traefik_version',
         'traefik_outdated_info',
         'server_metadata',
+        'ip_previous',
     ];
 
     use HasSafeStringAttribute;
@@ -1023,6 +1032,30 @@ $schema://$host {
     public function team()
     {
         return $this->belongsTo(Team::class);
+    }
+
+    /**
+     * @return array{id?: int, name: string, uuid: string, network: string, server_id: int}
+     */
+    public function defaultStandaloneDockerAttributes(?int $id = null): array
+    {
+        $attributes = [
+            'name' => 'coolify',
+            'uuid' => (string) new Cuid2,
+            'network' => 'coolify',
+            'server_id' => $this->id,
+        ];
+
+        if (! is_null($id)) {
+            $attributes['id'] = $id;
+        }
+
+        return $attributes;
+    }
+
+    public function environment_variables()
+    {
+        return $this->hasMany(SharedEnvironmentVariable::class)->where('type', 'server');
     }
 
     public function isProxyShouldRun()

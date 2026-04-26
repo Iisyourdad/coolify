@@ -214,7 +214,7 @@ function clone_application(Application $source, $destination, array $overrides =
         'updated_at',
         'additional_servers_count',
         'additional_networks_count',
-    ])->forceFill(array_merge([
+    ])->fill(array_merge([
         'uuid' => $uuid,
         'name' => $name,
         'fqdn' => $url,
@@ -241,6 +241,7 @@ function clone_application(Application $source, $destination, array $overrides =
             'application_id' => $newApplication->id,
         ]);
         $newApplicationSettings->save();
+        $newApplication->setRelation('settings', $newApplicationSettings->fresh());
     }
 
     // Clone tags

@@ -203,18 +203,39 @@ class Application extends BaseModel
         'restart_count',
         'last_restart_at',
         'last_restart_type',
+        'uuid',
+        'environment_id',
+        'destination_id',
+        'destination_type',
+        'source_id',
+        'source_type',
+        'repository_project_id',
+        'private_key_id',
     ];
 
     protected $appends = ['server_status'];
 
-    protected $casts = [
-        'http_basic_auth_password' => 'encrypted',
-        'restart_count' => 'integer',
-        'last_restart_at' => 'datetime',
-    ];
+    protected function casts(): array
+    {
+        return [
+            'http_basic_auth_password' => 'encrypted',
+            'manual_webhook_secret_github' => 'encrypted',
+            'manual_webhook_secret_gitlab' => 'encrypted',
+            'manual_webhook_secret_bitbucket' => 'encrypted',
+            'manual_webhook_secret_gitea' => 'encrypted',
+            'restart_count' => 'integer',
+            'last_restart_at' => 'datetime',
+        ];
+    }
 
     protected static function booted()
     {
+        static::creating(function ($application) {
+            $application->manual_webhook_secret_github ??= Str::random(40);
+            $application->manual_webhook_secret_gitlab ??= Str::random(40);
+            $application->manual_webhook_secret_bitbucket ??= Str::random(40);
+            $application->manual_webhook_secret_gitea ??= Str::random(40);
+        });
         static::addGlobalScope('withRelations', function ($builder) {
             $builder->withCount([
                 'additional_servers',
@@ -262,7 +283,7 @@ class Application extends BaseModel
                 }
             }
             if (count($payload) > 0) {
-                $application->forceFill($payload);
+                $application->fill($payload);
             }
 
             // Buildpack switching cleanup logic
@@ -299,7 +320,7 @@ class Application extends BaseModel
             }
         });
         static::created(function ($application) {
-            ApplicationSetting::forceCreate([
+            ApplicationSetting::create([
                 'application_id' => $application->id,
             ]);
             $application->compose_parsing_version = self::$parserVersion;

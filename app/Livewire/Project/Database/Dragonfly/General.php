@@ -57,7 +57,8 @@ class General extends Component
 
         return [
             "echo-private:team.{$teamId},DatabaseProxyStopped" => 'databaseProxyStopped',
-            "echo-private:user.{$userId},DatabaseStatusChanged" => '$refresh',
+            "echo-private:user.{$userId},DatabaseStatusChanged" => 'refresh',
+            "echo-private:team.{$teamId},ServiceChecked" => 'refresh',
         ];
     }
 
@@ -88,9 +89,11 @@ class General extends Component
         return [
             'name' => ValidationPatterns::nameRules(),
             'description' => ValidationPatterns::descriptionRules(),
-            'dragonflyPassword' => 'required|string',
+            'dragonflyPassword' => ValidationPatterns::databasePasswordRules(
+                enforcePattern: $this->dragonflyPassword !== $this->database->dragonfly_password,
+            ),
             'image' => 'required|string',
-            'portsMappings' => 'nullable|string',
+            'portsMappings' => ValidationPatterns::portMappingRules(),
             'isPublic' => 'nullable|boolean',
             'publicPort' => 'nullable|integer|min:1|max:65535',
             'publicPortTimeout' => 'nullable|integer|min:1',
@@ -106,9 +109,9 @@ class General extends Component
     {
         return array_merge(
             ValidationPatterns::combinedMessages(),
+            ValidationPatterns::portMappingMessages(),
             [
-                'dragonflyPassword.required' => 'The Dragonfly Password field is required.',
-                'dragonflyPassword.string' => 'The Dragonfly Password must be a string.',
+                ...ValidationPatterns::databasePasswordMessages('dragonflyPassword', 'Dragonfly Password'),
                 'image.required' => 'The Docker Image field is required.',
                 'image.string' => 'The Docker Image must be a string.',
                 'publicPort.integer' => 'The Public Port must be an integer.',
@@ -219,6 +222,9 @@ class General extends Component
         try {
             $this->authorize('update', $this->database);
 
+            if ($this->portsMappings) {
+                $this->portsMappings = str($this->portsMappings)->replace(' ', '')->trim()->toString();
+            }
             if (str($this->publicPort)->isEmpty()) {
                 $this->publicPort = null;
             }
@@ -294,5 +300,11 @@ class General extends Component
         } catch (Exception $e) {
             handleError($e, $this);
         }
+    }
+
+    public function refresh(): void
+    {
+        $this->database->refresh();
+        $this->syncData();
     }
 }

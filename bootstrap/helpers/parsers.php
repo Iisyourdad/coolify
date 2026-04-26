@@ -1600,7 +1600,7 @@ function serviceParser(Service $resource): Collection
                 if ($databaseFound) {
                     $savedService = $databaseFound;
                 } else {
-                    $savedService = ServiceDatabase::forceCreate([
+                    $savedService = ServiceDatabase::create([
                         'name' => $serviceName,
                         'service_id' => $resource->id,
                     ]);
@@ -1610,7 +1610,7 @@ function serviceParser(Service $resource): Collection
                 if ($applicationFound) {
                     $savedService = $applicationFound;
                 } else {
-                    $savedService = ServiceApplication::forceCreate([
+                    $savedService = ServiceApplication::create([
                         'name' => $serviceName,
                         'service_id' => $resource->id,
                     ]);

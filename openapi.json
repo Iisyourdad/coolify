@@ -361,7 +361,7 @@
                                                 },
                                                 "domain": {
                                                     "type": "string",
-                                                    "description": "Comma-separated list of URLs (e.g. \"http:\/\/app.coolify.io,https:\/\/app2.coolify.io\")"
+                                                    "description": "Comma-separated list of URLs (e.g. \"https:\/\/app.coolify.io,https:\/\/app2.coolify.io\")"
                                                 }
                                             },
                                             "type": "object"
@@ -811,7 +811,7 @@
                                                 },
                                                 "domain": {
                                                     "type": "string",
-                                                    "description": "Comma-separated list of URLs (e.g. \"http:\/\/app.coolify.io,https:\/\/app2.coolify.io\")"
+                                                    "description": "Comma-separated list of URLs (e.g. \"https:\/\/app.coolify.io,https:\/\/app2.coolify.io\")"
                                                 }
                                             },
                                             "type": "object"
@@ -1261,7 +1261,7 @@
                                                 },
                                                 "domain": {
                                                     "type": "string",
-                                                    "description": "Comma-separated list of URLs (e.g. \"http:\/\/app.coolify.io,https:\/\/app2.coolify.io\")"
+                                                    "description": "Comma-separated list of URLs (e.g. \"https:\/\/app.coolify.io,https:\/\/app2.coolify.io\")"
                                                 }
                                             },
                                             "type": "object"
@@ -2692,7 +2692,7 @@
                                                 },
                                                 "domain": {
                                                     "type": "string",
-                                                    "description": "Comma-separated list of URLs (e.g. \"http:\/\/app.coolify.io,https:\/\/app2.coolify.io\")"
+                                                    "description": "Comma-separated list of URLs (e.g. \"https:\/\/app.coolify.io,https:\/\/app2.coolify.io\")"
                                                 }
                                             },
                                             "type": "object"
@@ -3788,6 +3788,70 @@
                 ]
             }
         },
+        "\/applications\/{uuid}\/previews\/{pull_request_id}": {
+            "delete": {
+                "tags": [
+                    "Applications"
+                ],
+                "summary": "Delete Preview Deployment",
+                "description": "Delete a preview deployment for a pull request. Cancels active deployments, stops containers, removes volumes\/networks, and deletes the preview record.",
+                "operationId": "delete-preview-deployment-by-pull-request-id",
+                "parameters": [
+                    {
+                        "name": "uuid",
+                        "in": "path",
+                        "description": "UUID of the application.",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "pull_request_id",
+                        "in": "path",
+                        "description": "Pull request ID of the preview to delete.",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Preview deletion queued.",
+                        "content": {
+                            "application\/json": {
+                                "schema": {
+                                    "properties": {
+                                        "message": {
+                                            "type": "string"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "$ref": "#\/components\/responses\/401"
+                    },
+                    "400": {
+                        "$ref": "#\/components\/responses\/400"
+                    },
+                    "404": {
+                        "$ref": "#\/components\/responses\/404"
+                    },
+                    "422": {
+                        "$ref": "#\/components\/responses\/422"
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
+        },
         "\/cloud-tokens": {
             "get": {
                 "tags": [
@@ -4331,6 +4395,11 @@
                                     "database_backup_retention_max_storage_s3": {
                                         "type": "integer",
                                         "description": "Max storage (MB) for S3 backups"
+                                    },
+                                    "timeout": {
+                                        "type": "integer",
+                                        "description": "Backup job timeout in seconds (min: 60, max: 36000)",
+                                        "default": 3600
                                     }
                                 },
                                 "type": "object"
@@ -4896,6 +4965,11 @@
                                     "database_backup_retention_max_storage_s3": {
                                         "type": "integer",
                                         "description": "Max storage of the backup in S3"
+                                    },
+                                    "timeout": {
+                                        "type": "integer",
+                                        "description": "Backup job timeout in seconds (min: 60, max: 36000)",
+                                        "default": 3600
                                     }
                                 },
                                 "type": "object"
@@ -10451,6 +10525,26 @@
                                             "none"
                                         ],
                                         "description": "The proxy type."
+                                    },
+                                    "concurrent_builds": {
+                                        "type": "integer",
+                                        "description": "Number of concurrent builds."
+                                    },
+                                    "dynamic_timeout": {
+                                        "type": "integer",
+                                        "description": "Deployment timeout in seconds."
+                                    },
+                                    "deployment_queue_limit": {
+                                        "type": "integer",
+                                        "description": "Maximum number of queued deployments."
+                                    },
+                                    "server_disk_usage_notification_threshold": {
+                                        "type": "integer",
+                                        "description": "Server disk usage notification threshold (%)."
+                                    },
+                                    "server_disk_usage_check_frequency": {
+                                        "type": "string",
+                                        "description": "Cron expression for disk usage check frequency."
                                     }
                                 },
                                 "type": "object"
@@ -10781,7 +10875,7 @@
                                                 },
                                                 "url": {
                                                     "type": "string",
-                                                    "description": "Comma-separated list of URLs (e.g. \"http:\/\/app.coolify.io,https:\/\/app2.coolify.io\")."
+                                                    "description": "Comma-separated list of URLs (e.g. \"https:\/\/app.coolify.io,https:\/\/app2.coolify.io\")."
                                                 }
                                             },
                                             "type": "object"
@@ -11112,7 +11206,7 @@
                                                 },
                                                 "url": {
                                                     "type": "string",
-                                                    "description": "Comma-separated list of URLs (e.g. \"http:\/\/app.coolify.io,https:\/\/app2.coolify.io\")."
+                                                    "description": "Comma-separated list of URLs (e.g. \"https:\/\/app.coolify.io,https:\/\/app2.coolify.io\")."
                                                 }
                                             },
                                             "type": "object"

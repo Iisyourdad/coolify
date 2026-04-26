@@ -59,9 +59,11 @@ class General extends Component
     public function getListeners()
     {
         $userId = Auth::id();
+        $teamId = Auth::user()->currentTeam()->id;
 
         return [
-            "echo-private:user.{$userId},DatabaseStatusChanged" => '$refresh',
+            "echo-private:user.{$userId},DatabaseStatusChanged" => 'refresh',
+            "echo-private:team.{$teamId},ServiceChecked" => 'refresh',
             'envsUpdated' => 'refresh',
         ];
     }
@@ -73,14 +75,18 @@ class General extends Component
             'description' => ValidationPatterns::descriptionRules(),
             'redisConf' => 'nullable',
             'image' => 'required',
-            'portsMappings' => 'nullable',
+            'portsMappings' => ValidationPatterns::portMappingRules(),
             'isPublic' => 'nullable|boolean',
             'publicPort' => 'nullable|integer|min:1|max:65535',
             'publicPortTimeout' => 'nullable|integer|min:1',
             'isLogDrainEnabled' => 'nullable|boolean',
             'customDockerRunOptions' => 'nullable',
-            'redisUsername' => 'required',
-            'redisPassword' => 'required',
+            'redisUsername' => ValidationPatterns::databaseIdentifierRules(
+                enforcePattern: $this->redisUsername !== $this->database->redis_username,
+            ),
+            'redisPassword' => ValidationPatterns::databasePasswordRules(
+                enforcePattern: $this->redisPassword !== $this->database->redis_password,
+            ),
             'enableSsl' => 'boolean',
         ];
     }
@@ -89,6 +95,7 @@ class General extends Component
     {
         return array_merge(
             ValidationPatterns::combinedMessages(),
+            ValidationPatterns::portMappingMessages(),
             [
                 'name.required' => 'The Name field is required.',
                 'image.required' => 'The Docker Image field is required.',
@@ -97,8 +104,8 @@ class General extends Component
                 'publicPort.max' => 'The Public Port must not exceed 65535.',
                 'publicPortTimeout.integer' => 'The Public Port Timeout must be an integer.',
                 'publicPortTimeout.min' => 'The Public Port Timeout must be at least 1.',
-                'redisUsername.required' => 'The Redis Username field is required.',
-                'redisPassword.required' => 'The Redis Password field is required.',
+                ...ValidationPatterns::databaseIdentifierMessages('redisUsername', 'Redis Username'),
+                ...ValidationPatterns::databasePasswordMessages('redisPassword', 'Redis Password'),
             ]
         );
     }
@@ -203,6 +210,9 @@ class General extends Component
         try {
             $this->authorize('manageEnvironment', $this->database);
 
+            if ($this->portsMappings) {
+                $this->portsMappings = str($this->portsMappings)->replace(' ', '')->trim()->toString();
+            }
             $this->syncData(true);
 
             if (version_compare($this->redisVersion, '6.0', '>=')) {

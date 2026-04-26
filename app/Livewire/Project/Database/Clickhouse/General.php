@@ -76,10 +76,14 @@ class General extends Component
         return [
             'name' => ValidationPatterns::nameRules(),
             'description' => ValidationPatterns::descriptionRules(),
-            'clickhouseAdminUser' => 'required|string',
-            'clickhouseAdminPassword' => 'required|string',
+            'clickhouseAdminUser' => ValidationPatterns::databaseIdentifierRules(
+                enforcePattern: $this->clickhouseAdminUser !== $this->database->clickhouse_admin_user,
+            ),
+            'clickhouseAdminPassword' => ValidationPatterns::databasePasswordRules(
+                enforcePattern: $this->clickhouseAdminPassword !== $this->database->clickhouse_admin_password,
+            ),
             'image' => 'required|string',
-            'portsMappings' => 'nullable|string',
+            'portsMappings' => ValidationPatterns::portMappingRules(),
             'isPublic' => 'nullable|boolean',
             'publicPort' => 'nullable|integer|min:1|max:65535',
             'publicPortTimeout' => 'nullable|integer|min:1',
@@ -94,11 +98,10 @@ class General extends Component
     {
         return array_merge(
             ValidationPatterns::combinedMessages(),
+            ValidationPatterns::portMappingMessages(),
             [
-                'clickhouseAdminUser.required' => 'The Admin User field is required.',
-                'clickhouseAdminUser.string' => 'The Admin User must be a string.',
-                'clickhouseAdminPassword.required' => 'The Admin Password field is required.',
-                'clickhouseAdminPassword.string' => 'The Admin Password must be a string.',
+                ...ValidationPatterns::databaseIdentifierMessages('clickhouseAdminUser', 'Admin User'),
+                ...ValidationPatterns::databasePasswordMessages('clickhouseAdminPassword', 'Admin Password'),
                 'image.required' => 'The Docker Image field is required.',
                 'image.string' => 'The Docker Image must be a string.',
                 'publicPort.integer' => 'The Public Port must be an integer.',
@@ -209,6 +212,9 @@ class General extends Component
         try {
             $this->authorize('update', $this->database);
 
+            if ($this->portsMappings) {
+                $this->portsMappings = str($this->portsMappings)->replace(' ', '')->trim()->toString();
+            }
             if (str($this->publicPort)->isEmpty()) {
                 $this->publicPort = null;
             }

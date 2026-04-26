@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Support\ValidationPatterns;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Spatie\Url\Url;
 use Visus\Cuid2\Cuid2;
@@ -11,6 +12,7 @@ class ApplicationPreview extends BaseModel
     use SoftDeletes;
 
     protected $fillable = [
+        'uuid',
         'application_id',
         'pull_request_id',
         'pull_request_html_url',
@@ -41,11 +43,18 @@ class ApplicationPreview extends BaseModel
                 $networkKeys = collect($networks)->keys();
                 $volumeKeys = collect($volumes)->keys();
                 $volumeKeys->each(function ($key) use ($server) {
-                    instant_remote_process(["docker volume rm -f $key"], $server, false);
+                    if (! preg_match(ValidationPatterns::VOLUME_NAME_PATTERN, $key)) {
+                        return;
+                    }
+                    instant_remote_process(['docker volume rm -f '.escapeshellarg($key)], $server, false);
                 });
                 $networkKeys->each(function ($key) use ($server) {
-                    instant_remote_process(["docker network disconnect $key coolify-proxy"], $server, false);
-                    instant_remote_process(["docker network rm $key"], $server, false);
+                    if (! preg_match(ValidationPatterns::DOCKER_NETWORK_PATTERN, $key)) {
+                        return;
+                    }
+                    $k = escapeshellarg($key);
+                    instant_remote_process(["docker network disconnect {$k} coolify-proxy"], $server, false);
+                    instant_remote_process(["docker network rm {$k}"], $server, false);
                 });
             } else {
                 // Regular application volume cleanup
@@ -62,7 +71,7 @@ class ApplicationPreview extends BaseModel
         });
         static::saving(function ($preview) {
             if ($preview->isDirty('status')) {
-                $preview->forceFill(['last_online_at' => now()]);
+                $preview->last_online_at = now();
             }
         });
     }

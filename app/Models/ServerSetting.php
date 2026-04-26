@@ -58,6 +58,7 @@ use OpenApi\Attributes as OA;
 class ServerSetting extends Model
 {
     protected $fillable = [
+        'server_id',
         'is_swarm_manager',
         'is_jump_server',
         'is_build_server',

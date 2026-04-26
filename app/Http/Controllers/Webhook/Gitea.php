@@ -67,6 +67,15 @@ class Gitea extends Controller
             }
             foreach ($applications as $application) {
                 $webhook_secret = data_get($application, 'manual_webhook_secret_gitea');
+                if (empty($webhook_secret)) {
+                    $return_payloads->push([
+                        'application' => $application->name,
+                        'status' => 'failed',
+                        'message' => 'Webhook secret not configured.',
+                    ]);
+
+                    continue;
+                }
                 $hmac = hash_hmac('sha256', $request->getContent(), $webhook_secret);
                 if (! hash_equals($x_hub_signature_256, $hmac) && ! isDev()) {
                     $return_payloads->push([
@@ -144,7 +153,7 @@ class Gitea extends Controller
                             $found = ApplicationPreview::where('application_id', $application->id)->where('pull_request_id', $pull_request_id)->first();
                             if (! $found) {
                                 if ($application->build_pack === 'dockercompose') {
-                                    $pr_app = ApplicationPreview::forceCreate([
+                                    $pr_app = ApplicationPreview::create([
                                         'git_type' => 'gitea',
                                         'application_id' => $application->id,
                                         'pull_request_id' => $pull_request_id,
@@ -153,7 +162,7 @@ class Gitea extends Controller
                                     ]);
                                     $pr_app->generate_preview_fqdn_compose();
                                 } else {
-                                    $pr_app = ApplicationPreview::forceCreate([
+                                    $pr_app = ApplicationPreview::create([
                                         'git_type' => 'gitea',
                                         'application_id' => $application->id,
                                         'pull_request_id' => $pull_request_id,

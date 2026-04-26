@@ -7,8 +7,6 @@ use App\Models\GithubApp;
 use App\Models\GitlabApp;
 use App\Models\Project;
 use App\Models\Service;
-use App\Models\StandaloneDocker;
-use App\Models\SwarmDocker;
 use App\Rules\ValidGitBranch;
 use App\Rules\ValidGitRepositoryUrl;
 use App\Support\ValidationPatterns;
@@ -33,8 +31,6 @@ class PublicGitRepository extends Component
     public string $selectedBranch = 'main';
 
     public bool $isStatic = false;
-
-    public bool $checkCoolifyConfig = true;
 
     public ?string $publish_directory = null;
 
@@ -208,13 +204,8 @@ class PublicGitRepository extends Component
 
         if ($this->repository_url_parsed->getSegment(3) === 'tree') {
             $path = str($this->repository_url_parsed->getPath())->trim('/');
-            $this->git_branch = str($path)->after('tree/')->before('/')->value();
-            $this->base_directory = str($path)->after($this->git_branch)->after('/')->value();
-            if (filled($this->base_directory)) {
-                $this->base_directory = '/'.$this->base_directory;
-            } else {
-                $this->base_directory = '/';
-            }
+            $this->git_branch = str($path)->after('tree/')->value();
+            $this->base_directory = '/';
         } else {
             $this->git_branch = 'main';
         }
@@ -235,9 +226,32 @@ class PublicGitRepository extends Component
             return;
         }
         if ($this->git_source->getMorphClass() === GithubApp::class) {
-            ['rate_limit_remaining' => $this->rate_limit_remaining, 'rate_limit_reset' => $this->rate_limit_reset] = githubApi(source: $this->git_source, endpoint: "/repos/{$this->git_repository}/branches/{$this->git_branch}");
-            $this->rate_limit_reset = Carbon::parse((int) $this->rate_limit_reset)->format('Y-M-d H:i:s');
-            $this->branchFound = true;
+            $originalBranch = $this->git_branch;
+            $branchToTry = $originalBranch;
+
+            while (true) {
+                try {
+                    $encodedBranch = urlencode($branchToTry);
+                    ['rate_limit_remaining' => $this->rate_limit_remaining, 'rate_limit_reset' => $this->rate_limit_reset] = githubApi(source: $this->git_source, endpoint: "/repos/{$this->git_repository}/branches/{$encodedBranch}");
+                    $this->rate_limit_reset = Carbon::parse((int) $this->rate_limit_reset)->format('Y-M-d H:i:s');
+                    $this->git_branch = $branchToTry;
+
+                    $remaining = str($originalBranch)->after($branchToTry)->trim('/')->value();
+                    $this->base_directory = filled($remaining) ? '/'.$remaining : '/';
+
+                    $this->branchFound = true;
+
+                    return;
+                } catch (\Throwable $e) {
+                    if (str_contains($branchToTry, '/')) {
+                        $branchToTry = str($branchToTry)->beforeLast('/')->value();
+
+                        continue;
+                    }
+
+                    throw $e;
+                }
+            }
         }
     }
 
@@ -266,16 +280,13 @@ class PublicGitRepository extends Component
                 throw new \RuntimeException('Invalid branch: '.$branchValidator->errors()->first('git_branch'));
             }
 
-            $destination_uuid = $this->query['destination'];
+            $destination_uuid = $this->query['destination'] ?? null;
             $project_uuid = $this->parameters['project_uuid'];
             $environment_uuid = $this->parameters['environment_uuid'];
 
-            $destination = StandaloneDocker::where('uuid', $destination_uuid)->first();
+            $destination = find_destination_for_current_team($destination_uuid);
             if (! $destination) {
-                $destination = SwarmDocker::where('uuid', $destination_uuid)->first();
-            }
-            if (! $destination) {
-                throw new \Exception('Destination not found. What?!');
+                throw new \Exception('Destination not found.');
             }
             $destination_class = $destination->getMorphClass();
 
@@ -299,7 +310,7 @@ class PublicGitRepository extends Component
                     $new_service['source_id'] = $this->git_source->id;
                     $new_service['source_type'] = $this->git_source->getMorphClass();
                 }
-                $service = Service::forceCreate($new_service);
+                $service = Service::create($new_service);
 
                 return redirect()->route('project.service.configuration', [
                     'service_uuid' => $service->uuid,
@@ -346,19 +357,13 @@ class PublicGitRepository extends Component
                 $application_init['docker_compose_location'] = $this->docker_compose_location;
                 $application_init['base_directory'] = $this->base_directory;
             }
-            $application = Application::forceCreate($application_init);
+            $application = Application::create($application_init);
 
             $application->settings->is_static = $this->isStatic;
             $application->settings->save();
             $fqdn = generateUrl(server: $destination->server, random: $application->uuid);
             $application->fqdn = $fqdn;
             $application->save();
-            if ($this->checkCoolifyConfig) {
-                // $config = loadConfigFromGit($this->repository_url, $this->git_branch, $this->base_directory, $this->query['server_id'], auth()->user()->currentTeam()->id);
-                // if ($config) {
-                //     $application->setConfig($config);
-                // }
-            }
 
             return redirect()->route('project.application.configuration', [
                 'application_uuid' => $application->uuid,

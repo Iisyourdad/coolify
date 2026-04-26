@@ -4,8 +4,6 @@ namespace App\Livewire\Project\New;
 
 use App\Models\Application;
 use App\Models\Project;
-use App\Models\StandaloneDocker;
-use App\Models\SwarmDocker;
 use App\Services\DockerImageParser;
 use Livewire\Component;
 use Visus\Cuid2\Cuid2;
@@ -111,13 +109,10 @@ class DockerImage extends Component
         $parser = new DockerImageParser;
         $parser->parse($dockerImage);
 
-        $destination_uuid = $this->query['destination'];
-        $destination = StandaloneDocker::where('uuid', $destination_uuid)->first();
+        $destination_uuid = $this->query['destination'] ?? null;
+        $destination = find_destination_for_current_team($destination_uuid);
         if (! $destination) {
-            $destination = SwarmDocker::where('uuid', $destination_uuid)->first();
-        }
-        if (! $destination) {
-            throw new \Exception('Destination not found. What?!');
+            throw new \Exception('Destination not found.');
         }
         $destination_class = $destination->getMorphClass();
 
@@ -133,7 +128,7 @@ class DockerImage extends Component
         // Determine the image tag based on whether it's a hash or regular tag
         $imageTag = $parser->isImageHash() ? 'sha256-'.$parser->getTag() : $parser->getTag();
 
-        $application = Application::forceCreate([
+        $application = Application::create([
             'name' => 'docker-image-'.new Cuid2,
             'repository_project_id' => 0,
             'git_repository' => 'coollabsio/coolify',

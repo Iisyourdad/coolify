@@ -100,7 +100,16 @@ class Gitlab extends Controller
             }
             foreach ($applications as $application) {
                 $webhook_secret = data_get($application, 'manual_webhook_secret_gitlab');
-                if (! hash_equals($webhook_secret ?? '', $x_gitlab_token ?? '')) {
+                if (empty($webhook_secret)) {
+                    $return_payloads->push([
+                        'application' => $application->name,
+                        'status' => 'failed',
+                        'message' => 'Webhook secret not configured.',
+                    ]);
+
+                    continue;
+                }
+                if (! hash_equals($webhook_secret, $x_gitlab_token ?? '')) {
                     $return_payloads->push([
                         'application' => $application->name,
                         'status' => 'failed',
@@ -177,7 +186,7 @@ class Gitlab extends Controller
                             $found = ApplicationPreview::where('application_id', $application->id)->where('pull_request_id', $pull_request_id)->first();
                             if (! $found) {
                                 if ($application->build_pack === 'dockercompose') {
-                                    $pr_app = ApplicationPreview::forceCreate([
+                                    $pr_app = ApplicationPreview::create([
                                         'git_type' => 'gitlab',
                                         'application_id' => $application->id,
                                         'pull_request_id' => $pull_request_id,
@@ -186,7 +195,7 @@ class Gitlab extends Controller
                                     ]);
                                     $pr_app->generate_preview_fqdn_compose();
                                 } else {
-                                    $pr_app = ApplicationPreview::forceCreate([
+                                    $pr_app = ApplicationPreview::create([
                                         'git_type' => 'gitlab',
                                         'application_id' => $application->id,
                                         'pull_request_id' => $pull_request_id,

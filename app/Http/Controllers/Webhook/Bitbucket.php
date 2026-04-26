@@ -57,10 +57,29 @@ class Bitbucket extends Controller
             }
             foreach ($applications as $application) {
                 $webhook_secret = data_get($application, 'manual_webhook_secret_bitbucket');
+                if (empty($webhook_secret)) {
+                    $return_payloads->push([
+                        'application' => $application->name,
+                        'status' => 'failed',
+                        'message' => 'Webhook secret not configured.',
+                    ]);
+
+                    continue;
+                }
                 $payload = $request->getContent();
 
-                [$algo, $hash] = explode('=', $x_bitbucket_token, 2);
-                $payloadHash = hash_hmac($algo, $payload, $webhook_secret);
+                $parts = explode('=', $x_bitbucket_token, 2);
+                if (count($parts) !== 2 || $parts[0] !== 'sha256') {
+                    $return_payloads->push([
+                        'application' => $application->name,
+                        'status' => 'failed',
+                        'message' => 'Invalid signature.',
+                    ]);
+
+                    continue;
+                }
+                $hash = $parts[1];
+                $payloadHash = hash_hmac('sha256', $payload, $webhook_secret);
                 if (! hash_equals($hash, $payloadHash) && ! isDev()) {
                     $return_payloads->push([
                         'application' => $application->name,
@@ -119,7 +138,7 @@ class Bitbucket extends Controller
                         $found = ApplicationPreview::where('application_id', $application->id)->where('pull_request_id', $pull_request_id)->first();
                         if (! $found) {
                             if ($application->build_pack === 'dockercompose') {
-                                $pr_app = ApplicationPreview::forceCreate([
+                                $pr_app = ApplicationPreview::create([
                                     'git_type' => 'bitbucket',
                                     'application_id' => $application->id,
                                     'pull_request_id' => $pull_request_id,
@@ -128,7 +147,7 @@ class Bitbucket extends Controller
                                 ]);
                                 $pr_app->generate_preview_fqdn_compose();
                             } else {
-                                $pr_app = ApplicationPreview::forceCreate([
+                                $pr_app = ApplicationPreview::create([
                                     'git_type' => 'bitbucket',
                                     'application_id' => $application->id,
                                     'pull_request_id' => $pull_request_id,

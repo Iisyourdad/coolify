@@ -4,7 +4,7 @@
 An open-source & self-hostable Heroku / Netlify / Vercel alternative. 
 
 ![Latest Release Version](https://img.shields.io/badge/dynamic/json?labelColor=grey&color=6366f1&label=Latest%20released%20version&url=https%3A%2F%2Fcdn.coollabs.io%2Fcoolify%2Fversions.json&query=coolify.v4.version&style=for-the-badge
-) [![Bounty Issues](https://img.shields.io/static/v1?labelColor=grey&color=6366f1&label=Algora&message=%F0%9F%92%8E+Bounty+issues&style=for-the-badge)](https://console.algora.io/org/coollabsio/bounties/new)
+)
 </div>
 
 ## About the Project
@@ -60,12 +60,11 @@ Thank you so much!
 * [MVPS](https://www.mvps.net?ref=coolify.io) - Cheap VPS servers at the highest possible quality
 * [SerpAPI](https://serpapi.com?ref=coolify.io) - Google Search API — Scrape Google and other search engines from our fast, easy, and complete API
 * [ScreenshotOne](https://screenshotone.com?ref=coolify.io) - Screenshot API for devs
-*
+* [PrivateAlps](https://privatealps.net?ref=coolify.io) - Cloud Services Provider, VPS, servers Infrastructure for people who care about privacy and control
 
 ### Big Sponsors
 
 * [23M](https://23m.com?ref=coolify.io) - Your experts for high-availability hosting solutions!
-* [Algora](https://algora.io?ref=coolify.io) - Open source contribution platform
 * [American Cloud](https://americancloud.com?ref=coolify.io) - US-based cloud infrastructure services
 * [Arcjet](https://arcjet.com?ref=coolify.io) - Advanced web security and performance solutions
 * [BC Direct](https://bc.direct?ref=coolify.io) - Your trusted technology consulting partner
@@ -152,6 +151,8 @@ Thank you so much!
 <a href="https://capgo.app/?utm_source=coolify.io"><img width="60px" alt="Cap-go" src="https://github.com/cap-go.png"/></a>
 <a href="https://interviewpal.com/?utm_source=coolify.io"><img width="60px" alt="InterviewPal" src="/public/svgs/interviewpal.svg"/></a>
 <a href="https://transcript.lol/?utm_source=coolify.io"><img width="60px" alt="Transcript LOL" src="https://transcript.lol/logo.png"/></a>
+<a href="https://youstable.com/?utm_source=coolify.io"><img width="60px" alt="YouStable" src="https://github.com/youstable.png"/></a>
+<a href="https://github.com/mindedtech?utm_source=coolify.io"><img width="60px" alt="MindedTech" src="https://github.com/mindedtech.png"/></a>
 
 
 ...and many more at [GitHub Sponsors](https://github.com/sponsors/coollabsio)

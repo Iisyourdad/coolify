@@ -13,6 +13,7 @@ class StandaloneDocker extends BaseModel
     use HasSafeStringAttribute;
 
     protected $fillable = [
+        'server_id',
         'name',
         'network',
     ];
@@ -87,6 +88,16 @@ class StandaloneDocker extends BaseModel
     public function server()
     {
         return $this->belongsTo(Server::class);
+    }
+
+    public static function ownedByCurrentTeam()
+    {
+        return static::whereHas('server', fn ($q) => $q->whereTeamId(currentTeam()->id));
+    }
+
+    public static function ownedByCurrentTeamAPI(int $teamId)
+    {
+        return static::whereHas('server', fn ($q) => $q->whereTeamId($teamId));
     }
 
     /**

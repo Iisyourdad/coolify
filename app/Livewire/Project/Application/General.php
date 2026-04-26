@@ -153,8 +153,8 @@ class General extends Component
             'staticImage' => 'required',
             'baseDirectory' => array_merge(['required'], array_slice(ValidationPatterns::directoryPathRules(), 1)),
             'publishDirectory' => ValidationPatterns::directoryPathRules(),
-            'portsExposes' => 'required',
-            'portsMappings' => 'nullable',
+            'portsExposes' => ['required', 'string', 'regex:/^(\d+)(,\d+)*$/'],
+            'portsMappings' => ValidationPatterns::portMappingRules(),
             'customNetworkAliases' => 'nullable',
             'dockerfile' => 'nullable',
             'dockerRegistryImageName' => 'nullable',
@@ -197,12 +197,12 @@ class General extends Component
                 'baseDirectory.regex' => 'The base directory must be a valid path starting with / and containing only safe characters.',
                 'publishDirectory.regex' => 'The publish directory must be a valid path starting with / and containing only safe characters.',
                 'dockerfileTargetBuild.regex' => 'The Dockerfile target build must contain only alphanumeric characters, dots, hyphens, and underscores.',
-                'dockerComposeCustomStartCommand.regex' => 'The Docker Compose start command contains invalid characters. Shell operators like ;, |, $, and backticks are not allowed.',
-                'dockerComposeCustomBuildCommand.regex' => 'The Docker Compose build command contains invalid characters. Shell operators like ;, |, $, and backticks are not allowed.',
-                'customDockerRunOptions.regex' => 'The custom Docker run options contain invalid characters. Shell operators like ;, |, $, and backticks are not allowed.',
-                'installCommand.regex' => 'The install command contains invalid characters. Shell operators like ;, |, $, and backticks are not allowed.',
-                'buildCommand.regex' => 'The build command contains invalid characters. Shell operators like ;, |, $, and backticks are not allowed.',
-                'startCommand.regex' => 'The start command contains invalid characters. Shell operators like ;, |, $, and backticks are not allowed.',
+                'dockerComposeCustomStartCommand.regex' => 'The Docker Compose start command contains invalid characters. Allowed: alphanumerics, && / || chaining, balanced quotes, globs (*, ?), !, and safe path/arg chars. Blocked: bare &, bare |, ;, $, backtick, (, ), <, >, \\, newlines.',
+                'dockerComposeCustomBuildCommand.regex' => 'The Docker Compose build command contains invalid characters. Allowed: alphanumerics, && / || chaining, balanced quotes, globs (*, ?), !, and safe path/arg chars. Blocked: bare &, bare |, ;, $, backtick, (, ), <, >, \\, newlines.',
+                'customDockerRunOptions.regex' => 'The custom Docker run options contain invalid characters. Allowed: alphanumerics, && / || chaining, balanced quotes, globs (*, ?), !, and safe path/arg chars. Blocked: bare &, bare |, ;, $, backtick, (, ), <, >, \\, newlines.',
+                'installCommand.regex' => 'The install command contains invalid characters. Allowed: alphanumerics, && / || chaining, balanced quotes, globs (*, ?), !, and safe path/arg chars. Blocked: bare &, bare |, ;, $, backtick, (, ), <, >, \\, newlines.',
+                'buildCommand.regex' => 'The build command contains invalid characters. Allowed: alphanumerics, && / || chaining, balanced quotes, globs (*, ?), !, and safe path/arg chars. Blocked: bare &, bare |, ;, $, backtick, (, ), <, >, \\, newlines.',
+                'startCommand.regex' => 'The start command contains invalid characters. Allowed: alphanumerics, && / || chaining, balanced quotes, globs (*, ?), !, and safe path/arg chars. Blocked: bare &, bare |, ;, $, backtick, (, ), <, >, \\, newlines.',
                 'preDeploymentCommandContainer.regex' => 'The pre-deployment command container name must contain only alphanumeric characters, dots, hyphens, and underscores.',
                 'postDeploymentCommandContainer.regex' => 'The post-deployment command container name must contain only alphanumeric characters, dots, hyphens, and underscores.',
                 'name.required' => 'The Name field is required.',
@@ -212,6 +212,8 @@ class General extends Component
                 'staticImage.required' => 'The Static Image field is required.',
                 'baseDirectory.required' => 'The Base Directory field is required.',
                 'portsExposes.required' => 'The Exposed Ports field is required.',
+                'portsExposes.regex' => 'Ports exposes must be a comma-separated list of port numbers (e.g. 3000,3001).',
+                ...ValidationPatterns::portMappingMessages(),
                 'isStatic.required' => 'The Static setting is required.',
                 'isStatic.boolean' => 'The Static setting must be true or false.',
                 'isSpa.required' => 'The SPA setting is required.',
@@ -756,6 +758,12 @@ class General extends Component
             $this->authorize('update', $this->application);
 
             $this->resetErrorBag();
+
+            $this->portsExposes = str($this->portsExposes)->replace(' ', '')->trim()->toString();
+            if ($this->portsMappings) {
+                $this->portsMappings = str($this->portsMappings)->replace(' ', '')->trim()->toString();
+            }
+
             $this->validate();
 
             $oldPortsExposes = $this->application->ports_exposes;

@@ -61,9 +61,11 @@ class General extends Component
     public function getListeners()
     {
         $userId = Auth::id();
+        $teamId = Auth::user()->currentTeam()->id;
 
         return [
-            "echo-private:user.{$userId},DatabaseStatusChanged" => '$refresh',
+            "echo-private:user.{$userId},DatabaseStatusChanged" => 'refresh',
+            "echo-private:team.{$teamId},ServiceChecked" => 'refresh',
         ];
     }
 
@@ -72,13 +74,21 @@ class General extends Component
         return [
             'name' => ValidationPatterns::nameRules(),
             'description' => ValidationPatterns::descriptionRules(),
-            'mariadbRootPassword' => 'required',
-            'mariadbUser' => 'required',
-            'mariadbPassword' => 'required',
-            'mariadbDatabase' => 'required',
+            'mariadbRootPassword' => ValidationPatterns::databasePasswordRules(
+                enforcePattern: $this->mariadbRootPassword !== $this->database->mariadb_root_password,
+            ),
+            'mariadbUser' => ValidationPatterns::databaseIdentifierRules(
+                enforcePattern: $this->mariadbUser !== $this->database->mariadb_user,
+            ),
+            'mariadbPassword' => ValidationPatterns::databasePasswordRules(
+                enforcePattern: $this->mariadbPassword !== $this->database->mariadb_password,
+            ),
+            'mariadbDatabase' => ValidationPatterns::databaseIdentifierRules(
+                enforcePattern: $this->mariadbDatabase !== $this->database->mariadb_database,
+            ),
             'mariadbConf' => 'nullable',
             'image' => 'required',
-            'portsMappings' => 'nullable',
+            'portsMappings' => ValidationPatterns::portMappingRules(),
             'isPublic' => 'nullable|boolean',
             'publicPort' => 'nullable|integer|min:1|max:65535',
             'publicPortTimeout' => 'nullable|integer|min:1',
@@ -92,12 +102,13 @@ class General extends Component
     {
         return array_merge(
             ValidationPatterns::combinedMessages(),
+            ValidationPatterns::portMappingMessages(),
             [
                 'name.required' => 'The Name field is required.',
-                'mariadbRootPassword.required' => 'The Root Password field is required.',
-                'mariadbUser.required' => 'The MariaDB User field is required.',
-                'mariadbPassword.required' => 'The MariaDB Password field is required.',
-                'mariadbDatabase.required' => 'The MariaDB Database field is required.',
+                ...ValidationPatterns::databasePasswordMessages('mariadbRootPassword', 'Root Password'),
+                ...ValidationPatterns::databaseIdentifierMessages('mariadbUser', 'MariaDB User'),
+                ...ValidationPatterns::databasePasswordMessages('mariadbPassword', 'MariaDB Password'),
+                ...ValidationPatterns::databaseIdentifierMessages('mariadbDatabase', 'MariaDB Database'),
                 'image.required' => 'The Docker Image field is required.',
                 'publicPort.integer' => 'The Public Port must be an integer.',
                 'publicPort.min' => 'The Public Port must be at least 1.',
@@ -215,6 +226,9 @@ class General extends Component
         try {
             $this->authorize('update', $this->database);
 
+            if ($this->portsMappings) {
+                $this->portsMappings = str($this->portsMappings)->replace(' ', '')->trim()->toString();
+            }
             if (str($this->publicPort)->isEmpty()) {
                 $this->publicPort = null;
             }

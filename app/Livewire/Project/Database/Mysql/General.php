@@ -63,9 +63,11 @@ class General extends Component
     public function getListeners()
     {
         $userId = Auth::id();
+        $teamId = Auth::user()->currentTeam()->id;
 
         return [
-            "echo-private:user.{$userId},DatabaseStatusChanged" => '$refresh',
+            "echo-private:user.{$userId},DatabaseStatusChanged" => 'refresh',
+            "echo-private:team.{$teamId},ServiceChecked" => 'refresh',
         ];
     }
 
@@ -74,13 +76,21 @@ class General extends Component
         return [
             'name' => ValidationPatterns::nameRules(),
             'description' => ValidationPatterns::descriptionRules(),
-            'mysqlRootPassword' => 'required',
-            'mysqlUser' => 'required',
-            'mysqlPassword' => 'required',
-            'mysqlDatabase' => 'required',
+            'mysqlRootPassword' => ValidationPatterns::databasePasswordRules(
+                enforcePattern: $this->mysqlRootPassword !== $this->database->mysql_root_password,
+            ),
+            'mysqlUser' => ValidationPatterns::databaseIdentifierRules(
+                enforcePattern: $this->mysqlUser !== $this->database->mysql_user,
+            ),
+            'mysqlPassword' => ValidationPatterns::databasePasswordRules(
+                enforcePattern: $this->mysqlPassword !== $this->database->mysql_password,
+            ),
+            'mysqlDatabase' => ValidationPatterns::databaseIdentifierRules(
+                enforcePattern: $this->mysqlDatabase !== $this->database->mysql_database,
+            ),
             'mysqlConf' => 'nullable',
             'image' => 'required',
-            'portsMappings' => 'nullable',
+            'portsMappings' => ValidationPatterns::portMappingRules(),
             'isPublic' => 'nullable|boolean',
             'publicPort' => 'nullable|integer|min:1|max:65535',
             'publicPortTimeout' => 'nullable|integer|min:1',
@@ -95,12 +105,13 @@ class General extends Component
     {
         return array_merge(
             ValidationPatterns::combinedMessages(),
+            ValidationPatterns::portMappingMessages(),
             [
                 'name.required' => 'The Name field is required.',
-                'mysqlRootPassword.required' => 'The Root Password field is required.',
-                'mysqlUser.required' => 'The MySQL User field is required.',
-                'mysqlPassword.required' => 'The MySQL Password field is required.',
-                'mysqlDatabase.required' => 'The MySQL Database field is required.',
+                ...ValidationPatterns::databasePasswordMessages('mysqlRootPassword', 'Root Password'),
+                ...ValidationPatterns::databaseIdentifierMessages('mysqlUser', 'MySQL User'),
+                ...ValidationPatterns::databasePasswordMessages('mysqlPassword', 'MySQL Password'),
+                ...ValidationPatterns::databaseIdentifierMessages('mysqlDatabase', 'MySQL Database'),
                 'image.required' => 'The Docker Image field is required.',
                 'publicPort.integer' => 'The Public Port must be an integer.',
                 'publicPort.min' => 'The Public Port must be at least 1.',
@@ -222,6 +233,9 @@ class General extends Component
         try {
             $this->authorize('update', $this->database);
 
+            if ($this->portsMappings) {
+                $this->portsMappings = str($this->portsMappings)->replace(' ', '')->trim()->toString();
+            }
             if (str($this->publicPort)->isEmpty()) {
                 $this->publicPort = null;
             }
