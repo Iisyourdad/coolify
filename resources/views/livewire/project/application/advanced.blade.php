@@ -65,16 +65,20 @@
                     canGate="update" :canResource="$application" />
                 <x-forms.checkbox instantSave id="excludeFromMasterDomainRouting"
                     label="Exclude From Master Domain Routing"
-                    helper="When enabled, Coolify will not generate master domain routing for this application and will remove any existing generated master router file."
+                    helper="When enabled, Coolify will not generate master domain routing for this application and will remove any existing generated master router file. Disabling it regenerates the route."
                     canGate="update" :canResource="$application" />
+                <x-forms.button canGate="update" :canResource="$application" wire:click="regenerateMasterDomainRouting"
+                    wire:target="regenerateMasterDomainRouting">Regenerate Master Domain Routing</x-forms.button>
             @endif
 
             <h3 class="pt-4">Proxy</h3>
             @if ($application->build_pack !== 'dockercompose')
                 <x-forms.checkbox instantSave id="excludeFromMasterDomainRouting"
                     label="Exclude From Master Domain Routing"
-                    helper="When enabled, Coolify will not generate master domain routing for this application and will remove any existing generated master router file."
+                    helper="When enabled, Coolify will not generate master domain routing for this application and will remove any existing generated master router file. Disabling it regenerates the route."
                     canGate="update" :canResource="$application" />
+                <x-forms.button canGate="update" :canResource="$application" wire:click="regenerateMasterDomainRouting"
+                    wire:target="regenerateMasterDomainRouting">Regenerate Master Domain Routing</x-forms.button>
             @endif
             @if ($application->settings->is_container_label_readonly_enabled)
                 <x-forms.checkbox

@@ -168,6 +168,7 @@ class Advanced extends Component
         try {
             $this->authorize('update', $this->application);
             $reset = false;
+            $wasExcludedFromMasterDomainRouting = (bool) $this->application->settings->exclude_from_master_domain_routing;
             if ($this->isLogDrainEnabled) {
                 if (! $this->application->destination->server->isLogDrainEnabled()) {
                     $this->isLogDrainEnabled = false;
@@ -191,7 +192,7 @@ class Advanced extends Component
             }
             $this->syncData(true);
 
-            $this->cleanupMasterDomainRoutesIfExcluded();
+            $this->syncMasterDomainRoutesIfExclusionChanged($wasExcludedFromMasterDomainRouting);
 
             if ($reset) {
                 $this->resetDefaultLabels();
@@ -208,6 +209,7 @@ class Advanced extends Component
     {
         try {
             $this->authorize('update', $this->application);
+            $wasExcludedFromMasterDomainRouting = (bool) $this->application->settings->exclude_from_master_domain_routing;
             if ($this->gpuCount && $this->gpuDeviceIds) {
                 $this->dispatch('error', 'You cannot set both GPU count and GPU device IDs.');
                 $this->gpuCount = null;
@@ -217,22 +219,48 @@ class Advanced extends Component
                 return;
             }
             $this->syncData(true);
-            $this->cleanupMasterDomainRoutesIfExcluded();
+            $this->syncMasterDomainRoutesIfExclusionChanged($wasExcludedFromMasterDomainRouting);
             $this->dispatch('success', 'Settings saved.');
         } catch (\Throwable $e) {
             return handleError($e, $this);
         }
     }
 
-    private function cleanupMasterDomainRoutesIfExcluded(): void
+    public function regenerateMasterDomainRouting()
     {
-        if (! $this->excludeFromMasterDomainRouting) {
+        try {
+            $this->authorize('update', $this->application);
+            $this->excludeFromMasterDomainRouting = false;
+            $this->application->settings->exclude_from_master_domain_routing = false;
+            $this->application->settings->save();
+
+            $this->syncMasterDomainRoutes();
+
+            $this->dispatch('success', 'Master domain routing regenerated.');
+            $this->dispatch('configurationChanged');
+        } catch (\Throwable $e) {
+            return handleError($e, $this);
+        }
+    }
+
+    private function syncMasterDomainRoutesIfExclusionChanged(bool $wasExcludedFromMasterDomainRouting): void
+    {
+        if ($wasExcludedFromMasterDomainRouting === $this->excludeFromMasterDomainRouting) {
             return;
         }
 
-        $warnings = app(EdgeProxyRemoteRouteService::class)->deleteApplication($this->application);
+        $this->syncMasterDomainRoutes();
+    }
+
+    private function syncMasterDomainRoutes(): void
+    {
+        $routeService = app(EdgeProxyRemoteRouteService::class);
+        $warnings = $this->excludeFromMasterDomainRouting
+            ? $routeService->deleteApplication($this->application)
+            : $routeService->syncApplication($this->application);
+
         foreach ($warnings as $warning) {
-            $this->dispatch('error', $warning);
+            $this->dispatch($this->excludeFromMasterDomainRouting ? 'error' : 'warning', $warning);
         }
     }
 

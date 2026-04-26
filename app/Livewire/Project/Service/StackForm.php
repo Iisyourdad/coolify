@@ -134,9 +134,10 @@ class StackForm extends Component
 
     public function instantSave()
     {
+        $wasExcludedFromMasterDomainRouting = (bool) $this->service->exclude_from_master_domain_routing;
         $this->syncData(true);
         $this->service->save();
-        $this->cleanupMasterDomainRoutesIfExcluded();
+        $this->syncMasterDomainRoutesIfExclusionChanged($wasExcludedFromMasterDomainRouting);
         $this->dispatch('success', 'Service settings saved.');
     }
 
@@ -144,6 +145,7 @@ class StackForm extends Component
     {
         try {
             $this->validate();
+            $wasExcludedFromMasterDomainRouting = (bool) $this->service->exclude_from_master_domain_routing;
             $this->syncData(true);
 
             // Validate for command injection BEFORE any database operations
@@ -158,7 +160,7 @@ class StackForm extends Component
             // Refresh and write files after a successful commit
             $this->service->refresh();
             $this->syncData(false);
-            $this->cleanupMasterDomainRoutesIfExcluded();
+            $this->syncMasterDomainRoutesIfExclusionChanged($wasExcludedFromMasterDomainRouting);
             $this->service->saveComposeConfigs();
 
             $this->dispatch('refreshEnvs');
@@ -179,15 +181,36 @@ class StackForm extends Component
         }
     }
 
-    private function cleanupMasterDomainRoutesIfExcluded(): void
+    public function regenerateMasterDomainRouting(): void
     {
-        if (! $this->excludeFromMasterDomainRouting) {
+        $this->excludeFromMasterDomainRouting = false;
+        $this->service->exclude_from_master_domain_routing = false;
+        $this->service->save();
+
+        $this->syncMasterDomainRoutes();
+
+        $this->dispatch('success', 'Master domain routing regenerated.');
+        $this->dispatch('configurationChanged');
+    }
+
+    private function syncMasterDomainRoutesIfExclusionChanged(bool $wasExcludedFromMasterDomainRouting): void
+    {
+        if ($wasExcludedFromMasterDomainRouting === $this->excludeFromMasterDomainRouting) {
             return;
         }
 
-        $warnings = app(EdgeProxyRemoteRouteService::class)->deleteService($this->service);
+        $this->syncMasterDomainRoutes();
+    }
+
+    private function syncMasterDomainRoutes(): void
+    {
+        $routeService = app(EdgeProxyRemoteRouteService::class);
+        $warnings = $this->excludeFromMasterDomainRouting
+            ? $routeService->deleteService($this->service)
+            : $routeService->syncService($this->service);
+
         foreach ($warnings as $warning) {
-            $this->dispatch('error', $warning);
+            $this->dispatch($this->excludeFromMasterDomainRouting ? 'error' : 'warning', $warning);
         }
     }
 

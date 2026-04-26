@@ -376,12 +376,13 @@ class Index extends Component
     {
         try {
             $this->authorize('update', $this->serviceApplication);
+            $wasExcludedFromMasterDomainRouting = (bool) data_get($this->serviceApplication, 'exclude_from_master_domain_routing', false);
             $this->serviceApplication->is_gzip_enabled = $this->isGzipEnabled;
             $this->serviceApplication->is_stripprefix_enabled = $this->isStripprefixEnabled;
             $this->serviceApplication->exclude_from_status = $this->excludeFromStatus;
             $this->serviceApplication->exclude_from_master_domain_routing = $this->excludeFromMasterDomainRouting;
             $this->serviceApplication->save();
-            $this->syncServiceMasterDomainRoutesIfApplicationExcluded();
+            $this->syncServiceMasterDomainRoutesIfApplicationExclusionChanged($wasExcludedFromMasterDomainRouting);
             $this->dispatch('success', 'Settings saved.');
         } catch (\Throwable $e) {
             return handleError($e, $this);
@@ -580,12 +581,42 @@ class Index extends Component
         }
     }
 
+    public function regenerateMasterDomainRouting()
+    {
+        try {
+            $this->authorize('update', $this->serviceApplication);
+            $this->excludeFromMasterDomainRouting = false;
+            $this->serviceApplication->exclude_from_master_domain_routing = false;
+            $this->serviceApplication->save();
+
+            $this->syncServiceMasterDomainRoutes();
+
+            $this->dispatch('success', 'Master domain routing regenerated.');
+        } catch (\Throwable $e) {
+            return handleError($e, $this);
+        }
+    }
+
+    private function syncServiceMasterDomainRoutesIfApplicationExclusionChanged(bool $wasExcludedFromMasterDomainRouting): void
+    {
+        if ($wasExcludedFromMasterDomainRouting === $this->excludeFromMasterDomainRouting) {
+            return;
+        }
+
+        $this->syncServiceMasterDomainRoutes();
+    }
+
     private function syncServiceMasterDomainRoutesIfApplicationExcluded(): void
     {
         if (! $this->excludeFromMasterDomainRouting) {
             return;
         }
 
+        $this->syncServiceMasterDomainRoutes();
+    }
+
+    private function syncServiceMasterDomainRoutes(): void
+    {
         $service = data_get($this->serviceApplication, 'service');
         if (! $service instanceof Service) {
             return;

@@ -47,7 +47,11 @@
                         <x-forms.checkbox canGate="update" :canResource="$serviceApplication"
                             instantSave="instantSaveApplicationSettings" id="excludeFromMasterDomainRouting"
                             label="Exclude From Master Domain Routing"
-                            helper="When enabled, Coolify will not include this service application in master domain routing and will remove it from any existing generated master router file." />
+                            helper="When enabled, Coolify will not include this service application in master domain routing and will remove it from any existing generated master router file. Disabling it regenerates the route." />
+                        <x-forms.button canGate="update" :canResource="$serviceApplication"
+                            wire:click="regenerateMasterDomainRouting" wire:target="regenerateMasterDomainRouting">
+                            Regenerate Master Domain Routing
+                        </x-forms.button>
                         <x-forms.checkbox canGate="update" :canResource="$serviceApplication"
                             helper="Drain logs to your configured log drain endpoint in your Server settings."
                             instantSave="instantSaveApplicationAdvanced" id="isLogDrainEnabled" label="Drain Logs" />
