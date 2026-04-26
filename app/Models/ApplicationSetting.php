@@ -26,6 +26,7 @@ class ApplicationSetting extends Model
         'is_git_lfs_enabled' => 'boolean',
         'is_git_shallow_clone_enabled' => 'boolean',
         'docker_images_to_keep' => 'integer',
+        'exclude_from_master_domain_routing' => 'boolean',
     ];
 
     protected $fillable = [
@@ -50,6 +51,7 @@ class ApplicationSetting extends Model
         'is_gzip_enabled',
         'is_stripprefix_enabled',
         'connect_to_docker_network',
+        'exclude_from_master_domain_routing',
         'custom_internal_name',
         'is_container_label_escape_enabled',
         'is_env_sorting_enabled',

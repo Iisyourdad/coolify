@@ -3,6 +3,7 @@
 namespace App\Livewire\Project\Application;
 
 use App\Models\Application;
+use App\Services\EdgeProxyRemoteRouteService;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Livewire\Attributes\Validate;
 use Livewire\Component;
@@ -82,6 +83,9 @@ class Advanced extends Component
     #[Validate(['boolean'])]
     public bool $isConnectToDockerNetworkEnabled = false;
 
+    #[Validate(['boolean'])]
+    public bool $excludeFromMasterDomainRouting = false;
+
     public function mount()
     {
         try {
@@ -115,6 +119,7 @@ class Advanced extends Component
             $this->application->settings->is_stripprefix_enabled = $this->isStripprefixEnabled;
             $this->application->settings->is_raw_compose_deployment_enabled = $this->isRawComposeDeploymentEnabled;
             $this->application->settings->connect_to_docker_network = $this->isConnectToDockerNetworkEnabled;
+            $this->application->settings->exclude_from_master_domain_routing = $this->excludeFromMasterDomainRouting;
             $this->application->settings->disable_build_cache = $this->disableBuildCache;
             $this->application->settings->inject_build_args_to_dockerfile = $this->injectBuildArgsToDockerfile;
             $this->application->settings->include_source_commit_in_build = $this->includeSourceCommitInBuild;
@@ -141,6 +146,7 @@ class Advanced extends Component
             $this->customInternalName = $this->application->settings->custom_internal_name;
             $this->isRawComposeDeploymentEnabled = $this->application->settings->is_raw_compose_deployment_enabled;
             $this->isConnectToDockerNetworkEnabled = $this->application->settings->connect_to_docker_network;
+            $this->excludeFromMasterDomainRouting = $this->application->settings->exclude_from_master_domain_routing;
             $this->disableBuildCache = $this->application->settings->disable_build_cache;
             $this->injectBuildArgsToDockerfile = $this->application->settings->inject_build_args_to_dockerfile ?? true;
             $this->includeSourceCommitInBuild = $this->application->settings->include_source_commit_in_build ?? false;
@@ -185,6 +191,8 @@ class Advanced extends Component
             }
             $this->syncData(true);
 
+            $this->cleanupMasterDomainRoutesIfExcluded();
+
             if ($reset) {
                 $this->resetDefaultLabels();
             }
@@ -209,9 +217,22 @@ class Advanced extends Component
                 return;
             }
             $this->syncData(true);
+            $this->cleanupMasterDomainRoutesIfExcluded();
             $this->dispatch('success', 'Settings saved.');
         } catch (\Throwable $e) {
             return handleError($e, $this);
+        }
+    }
+
+    private function cleanupMasterDomainRoutesIfExcluded(): void
+    {
+        if (! $this->excludeFromMasterDomainRouting) {
+            return;
+        }
+
+        $warnings = app(EdgeProxyRemoteRouteService::class)->deleteApplication($this->application);
+        foreach ($warnings as $warning) {
+            $this->dispatch('error', $warning);
         }
     }
 

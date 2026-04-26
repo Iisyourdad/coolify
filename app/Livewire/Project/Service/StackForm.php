@@ -3,6 +3,7 @@
 namespace App\Livewire\Project\Service;
 
 use App\Models\Service;
+use App\Services\EdgeProxyRemoteRouteService;
 use App\Support\ValidationPatterns;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -27,6 +28,8 @@ class StackForm extends Component
 
     public ?bool $connectToDockerNetwork = null;
 
+    public bool $excludeFromMasterDomainRouting = false;
+
     protected function rules(): array
     {
         $baseRules = [
@@ -34,7 +37,8 @@ class StackForm extends Component
             'dockerCompose' => 'nullable',
             'name' => ValidationPatterns::nameRules(),
             'description' => ValidationPatterns::descriptionRules(),
-            'connectToDockerNetwork' => 'nullable',
+            'connectToDockerNetwork' => 'nullable|boolean',
+            'excludeFromMasterDomainRouting' => 'boolean',
         ];
 
         // Add dynamic field rules
@@ -74,6 +78,7 @@ class StackForm extends Component
             $this->service->docker_compose_raw = $this->dockerComposeRaw;
             $this->service->docker_compose = $this->dockerCompose;
             $this->service->connect_to_docker_network = $this->connectToDockerNetwork;
+            $this->service->exclude_from_master_domain_routing = $this->excludeFromMasterDomainRouting;
         } else {
             // Sync FROM model (on load/refresh)
             $this->name = $this->service->name;
@@ -81,6 +86,7 @@ class StackForm extends Component
             $this->dockerComposeRaw = $this->service->docker_compose_raw;
             $this->dockerCompose = $this->service->docker_compose;
             $this->connectToDockerNetwork = $this->service->connect_to_docker_network;
+            $this->excludeFromMasterDomainRouting = data_get($this->service, 'exclude_from_master_domain_routing', false);
         }
     }
 
@@ -130,6 +136,7 @@ class StackForm extends Component
     {
         $this->syncData(true);
         $this->service->save();
+        $this->cleanupMasterDomainRoutesIfExcluded();
         $this->dispatch('success', 'Service settings saved.');
     }
 
@@ -150,6 +157,8 @@ class StackForm extends Component
             });
             // Refresh and write files after a successful commit
             $this->service->refresh();
+            $this->syncData(false);
+            $this->cleanupMasterDomainRoutesIfExcluded();
             $this->service->saveComposeConfigs();
 
             $this->dispatch('refreshEnvs');
@@ -167,6 +176,18 @@ class StackForm extends Component
             } else {
                 $this->dispatch('configurationChanged');
             }
+        }
+    }
+
+    private function cleanupMasterDomainRoutesIfExcluded(): void
+    {
+        if (! $this->excludeFromMasterDomainRouting) {
+            return;
+        }
+
+        $warnings = app(EdgeProxyRemoteRouteService::class)->deleteService($this->service);
+        foreach ($warnings as $warning) {
+            $this->dispatch('error', $warning);
         }
     }
 

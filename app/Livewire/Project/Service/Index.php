@@ -8,6 +8,7 @@ use App\Models\Server;
 use App\Models\Service;
 use App\Models\ServiceApplication;
 use App\Models\ServiceDatabase;
+use App\Services\EdgeProxyRemoteRouteService;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -51,6 +52,8 @@ class Index extends Component
 
     public bool $excludeFromStatus = false;
 
+    public bool $excludeFromMasterDomainRouting = false;
+
     public mixed $publicPort = null;
 
     public mixed $publicPortTimeout = 3600;
@@ -91,6 +94,7 @@ class Index extends Component
         'description' => 'nullable',
         'image' => 'required',
         'excludeFromStatus' => 'required|boolean',
+        'excludeFromMasterDomainRouting' => 'required|boolean',
         'publicPort' => 'nullable|integer|min:1|max:65535',
         'publicPortTimeout' => 'nullable|integer|min:1',
         'isPublic' => 'required|boolean',
@@ -341,6 +345,7 @@ class Index extends Component
             $this->serviceApplication->fqdn = $this->fqdn;
             $this->serviceApplication->image = $this->image;
             $this->serviceApplication->exclude_from_status = $this->excludeFromStatus;
+            $this->serviceApplication->exclude_from_master_domain_routing = $this->excludeFromMasterDomainRouting;
             $this->serviceApplication->is_log_drain_enabled = $this->isLogDrainEnabled;
             $this->serviceApplication->is_gzip_enabled = $this->isGzipEnabled;
             $this->serviceApplication->is_stripprefix_enabled = $this->isStripprefixEnabled;
@@ -350,6 +355,7 @@ class Index extends Component
             $this->fqdn = $this->serviceApplication->fqdn;
             $this->image = $this->serviceApplication->image;
             $this->excludeFromStatus = data_get($this->serviceApplication, 'exclude_from_status', false);
+            $this->excludeFromMasterDomainRouting = data_get($this->serviceApplication, 'exclude_from_master_domain_routing', false);
             $this->isLogDrainEnabled = data_get($this->serviceApplication, 'is_log_drain_enabled', false);
             $this->isGzipEnabled = data_get($this->serviceApplication, 'is_gzip_enabled', true);
             $this->isStripprefixEnabled = data_get($this->serviceApplication, 'is_stripprefix_enabled', true);
@@ -373,7 +379,9 @@ class Index extends Component
             $this->serviceApplication->is_gzip_enabled = $this->isGzipEnabled;
             $this->serviceApplication->is_stripprefix_enabled = $this->isStripprefixEnabled;
             $this->serviceApplication->exclude_from_status = $this->excludeFromStatus;
+            $this->serviceApplication->exclude_from_master_domain_routing = $this->excludeFromMasterDomainRouting;
             $this->serviceApplication->save();
+            $this->syncServiceMasterDomainRoutesIfApplicationExcluded();
             $this->dispatch('success', 'Settings saved.');
         } catch (\Throwable $e) {
             return handleError($e, $this);
@@ -554,6 +562,7 @@ class Index extends Component
             $this->serviceApplication->refresh();
             $this->syncApplicationData(false);
             updateCompose($this->serviceApplication);
+            $this->syncServiceMasterDomainRoutesIfApplicationExcluded();
             if (str($this->serviceApplication->fqdn)->contains(',')) {
                 $this->dispatch('warning', 'Some services do not support multiple domains, which can lead to problems and is NOT RECOMMENDED.<br><br>Only use multiple domains if you know what you are doing.');
             } else {
@@ -568,6 +577,23 @@ class Index extends Component
             }
 
             return handleError($e, $this);
+        }
+    }
+
+    private function syncServiceMasterDomainRoutesIfApplicationExcluded(): void
+    {
+        if (! $this->excludeFromMasterDomainRouting) {
+            return;
+        }
+
+        $service = data_get($this->serviceApplication, 'service');
+        if (! $service instanceof Service) {
+            return;
+        }
+
+        $warnings = app(EdgeProxyRemoteRouteService::class)->syncService($service);
+        foreach ($warnings as $warning) {
+            $this->dispatch('warning', $warning);
         }
     }
 

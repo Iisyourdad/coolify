@@ -33,6 +33,7 @@ use Visus\Cuid2\Cuid2;
         'destination_type' => ['type' => 'string', 'description' => 'Destination type.'],
         'destination_id' => ['type' => 'integer', 'description' => 'The unique identifier of the destination where the service is running.'],
         'connect_to_docker_network' => ['type' => 'boolean', 'description' => 'The flag to connect the service to the predefined Docker network.'],
+        'exclude_from_master_domain_routing' => ['type' => 'boolean', 'description' => 'Exclude this service from master domain routing.'],
         'is_container_label_escape_enabled' => ['type' => 'boolean', 'description' => 'The flag to enable the container label escape.'],
         'is_container_label_readonly_enabled' => ['type' => 'boolean', 'description' => 'The flag to enable the container label readonly.'],
         'config_hash' => ['type' => 'string', 'description' => 'The hash of the service configuration.'],
@@ -54,6 +55,7 @@ class Service extends BaseModel
         'docker_compose_raw',
         'docker_compose',
         'connect_to_docker_network',
+        'exclude_from_master_domain_routing',
         'service_type',
         'config_hash',
         'compose_parsing_version',
@@ -61,6 +63,11 @@ class Service extends BaseModel
     ];
 
     protected $appends = ['server_status', 'status'];
+
+    protected $casts = [
+        'connect_to_docker_network' => 'boolean',
+        'exclude_from_master_domain_routing' => 'boolean',
+    ];
 
     protected static function booted()
     {

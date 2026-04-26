@@ -20,6 +20,7 @@ class ServiceApplication extends BaseModel
         'exposes',
         'status',
         'exclude_from_status',
+        'exclude_from_master_domain_routing',
         'required_fqdn',
         'image',
         'is_log_drain_enabled',
@@ -28,6 +29,14 @@ class ServiceApplication extends BaseModel
         'is_stripprefix_enabled',
         'last_online_at',
         'is_migrated',
+    ];
+
+    protected $casts = [
+        'exclude_from_master_domain_routing' => 'boolean',
+        'exclude_from_status' => 'boolean',
+        'is_log_drain_enabled' => 'boolean',
+        'is_gzip_enabled' => 'boolean',
+        'is_stripprefix_enabled' => 'boolean',
     ];
 
     protected static function booted()

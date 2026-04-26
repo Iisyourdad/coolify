@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\Application;
+use App\Models\ApplicationSetting;
 use App\Models\Server;
 use App\Models\Service;
 use App\Models\ServiceApplication;
@@ -282,6 +283,102 @@ it('returns warning when syncing application route with master domain routing en
         ->and($manager->calls[1]['commands'][0])->toContain('/tmp/edge-26/dynamic/application-remote-application-missing-master-router.yaml');
 });
 
+it('deletes service edge route files when service is excluded from master domain routing', function () {
+    $firstEdgeProxyServer = Mockery::mock(Server::class)->makePartial();
+    $firstEdgeProxyServer->id = 121;
+    $firstEdgeProxyServer->shouldReceive('proxyPath')->andReturn('/tmp/edge-121');
+
+    $secondEdgeProxyServer = Mockery::mock(Server::class)->makePartial();
+    $secondEdgeProxyServer->id = 122;
+    $secondEdgeProxyServer->shouldReceive('proxyPath')->andReturn('/tmp/edge-122');
+
+    $manager = new class($firstEdgeProxyServer, $secondEdgeProxyServer) extends EdgeProxyRemoteRouteService
+    {
+        public array $calls = [];
+
+        public function __construct(private Server $firstEdgeProxyServer, private Server $secondEdgeProxyServer) {}
+
+        protected function resolveEdgeProxyServersByTeamId(?int $teamId): Collection
+        {
+            return collect([$this->firstEdgeProxyServer, $this->secondEdgeProxyServer]);
+        }
+
+        protected function runRemoteCommands(Server $server, array $commands, bool $throwError = true): ?string
+        {
+            $this->calls[] = [
+                'server_id' => $server->id,
+                'commands' => $commands,
+                'throw_error' => $throwError,
+            ];
+
+            return null;
+        }
+    };
+
+    $service = new Service;
+    $service->uuid = 'service-excluded-from-master-routing';
+    $service->exclude_from_master_domain_routing = true;
+    $service->setRelation('environment', (object) [
+        'project' => (object) ['team_id' => 42],
+    ]);
+
+    $warnings = $manager->syncService($service);
+
+    expect($warnings)->toBe([])
+        ->and($manager->calls)->toHaveCount(2)
+        ->and($manager->calls[0]['commands'][0])->toContain('/tmp/edge-121/dynamic/service-remote-service-excluded-from-master-routing.yaml')
+        ->and($manager->calls[1]['commands'][0])->toContain('/tmp/edge-122/dynamic/service-remote-service-excluded-from-master-routing.yaml');
+});
+
+it('deletes application edge route files when application is excluded from master domain routing', function () {
+    $firstEdgeProxyServer = Mockery::mock(Server::class)->makePartial();
+    $firstEdgeProxyServer->id = 123;
+    $firstEdgeProxyServer->shouldReceive('proxyPath')->andReturn('/tmp/edge-123');
+
+    $secondEdgeProxyServer = Mockery::mock(Server::class)->makePartial();
+    $secondEdgeProxyServer->id = 124;
+    $secondEdgeProxyServer->shouldReceive('proxyPath')->andReturn('/tmp/edge-124');
+
+    $manager = new class($firstEdgeProxyServer, $secondEdgeProxyServer) extends EdgeProxyRemoteRouteService
+    {
+        public array $calls = [];
+
+        public function __construct(private Server $firstEdgeProxyServer, private Server $secondEdgeProxyServer) {}
+
+        protected function resolveEdgeProxyServersByTeamId(?int $teamId): Collection
+        {
+            return collect([$this->firstEdgeProxyServer, $this->secondEdgeProxyServer]);
+        }
+
+        protected function runRemoteCommands(Server $server, array $commands, bool $throwError = true): ?string
+        {
+            $this->calls[] = [
+                'server_id' => $server->id,
+                'commands' => $commands,
+                'throw_error' => $throwError,
+            ];
+
+            return null;
+        }
+    };
+
+    $application = new Application;
+    $application->uuid = 'application-excluded-from-master-routing';
+    $application->setRelation('settings', new ApplicationSetting([
+        'exclude_from_master_domain_routing' => true,
+    ]));
+    $application->setRelation('environment', (object) [
+        'project' => (object) ['team_id' => 52],
+    ]);
+
+    $warnings = $manager->syncApplication($application);
+
+    expect($warnings)->toBe([])
+        ->and($manager->calls)->toHaveCount(2)
+        ->and($manager->calls[0]['commands'][0])->toContain('/tmp/edge-123/dynamic/application-remote-application-excluded-from-master-routing.yaml')
+        ->and($manager->calls[1]['commands'][0])->toContain('/tmp/edge-124/dynamic/application-remote-application-excluded-from-master-routing.yaml');
+});
+
 it('cleans up stale application route files from former edge servers after syncing', function () {
     $currentEdgeProxyServer = Mockery::mock(Server::class)->makePartial();
     $currentEdgeProxyServer->id = 27;
@@ -434,6 +531,71 @@ YAML;
     expect($manager->calls)->toHaveCount(3);
     $deleteCommands = implode("\n", $manager->calls[2]['commands']);
     expect($deleteCommands)->toContain("rm -f '$expectedPath' '$expectedTempPath'");
+});
+
+it('omits excluded service applications from service edge route files', function () {
+    $manager = new class extends EdgeProxyRemoteRouteService
+    {
+        public array $calls = [];
+
+        protected function runRemoteCommands(Server $server, array $commands, bool $throwError = true): ?string
+        {
+            $this->calls[] = [
+                'commands' => $commands,
+                'throw_error' => $throwError,
+            ];
+
+            return null;
+        }
+    };
+
+    $edgeProxyServer = Mockery::mock(Server::class)->makePartial();
+    $edgeProxyServer->id = 0;
+    $edgeProxyServer->shouldReceive('proxyType')->andReturn('TRAEFIK');
+    $edgeProxyServer->shouldReceive('proxyPath')->andReturn('/tmp/proxy');
+
+    $deploymentServer = Mockery::mock(Server::class)->makePartial();
+    $deploymentServer->id = 10;
+    $deploymentServer->ip = '10.8.0.15';
+    $deploymentServer->proxy = ['type' => 'NONE'];
+
+    $service = new Service;
+    $service->uuid = 'service-with-excluded-application';
+    $service->docker_compose_raw = <<<'YAML'
+services:
+  web:
+    ports:
+      - "9010:3000"
+  admin:
+    ports:
+      - "9020:3000"
+YAML;
+
+    $includedApplication = new ServiceApplication;
+    $includedApplication->name = 'web';
+    $includedApplication->fqdn = 'https://web.example.com:3000';
+
+    $excludedApplication = new ServiceApplication;
+    $excludedApplication->name = 'admin';
+    $excludedApplication->fqdn = 'https://admin.example.com:3000';
+    $excludedApplication->exclude_from_master_domain_routing = true;
+
+    $service->setRelation('applications', collect([$includedApplication, $excludedApplication]));
+    $includedApplication->setRelation('service', $service);
+    $excludedApplication->setRelation('service', $service);
+
+    $warnings = $manager->syncServiceWithServers($service, $edgeProxyServer, $deploymentServer);
+
+    expect($warnings)->toBe([])
+        ->and($manager->calls)->toHaveCount(1);
+
+    preg_match("/echo '([^']+)' \\| base64 -d/", $manager->calls[0]['commands'][1], $payloadMatches);
+    $payload = base64_decode($payloadMatches[1]);
+
+    expect($payload)->toContain('Host(`web.example.com`)')
+        ->and($payload)->toContain('http://10.8.0.15:9010')
+        ->and($payload)->not->toContain('Host(`admin.example.com`)')
+        ->and($payload)->not->toContain('http://10.8.0.15:9020');
 });
 
 it('creates, updates, and deletes a stable edge route file per application uuid', function () {

@@ -25,14 +25,19 @@ class EdgeProxyRemoteRouteService
     public function syncService(Service $service): array
     {
         $teamId = $this->extractServiceTeamId($service);
-        $deploymentServer = $this->resolveDeploymentServer($service);
 
-        if (! $deploymentServer instanceof Server) {
-            return [];
+        if ($this->isServiceExcludedFromMasterDomainRouting($service)) {
+            return $this->cleanupServiceRouteFiles($service);
         }
 
         if (! $this->isMasterDomainRoutingEnabledForTeamId($teamId)) {
             return $this->cleanupServiceRouteFiles($service);
+        }
+
+        $deploymentServer = $this->resolveDeploymentServer($service);
+
+        if (! $deploymentServer instanceof Server) {
+            return [];
         }
 
         $edgeProxyServer = $this->resolveEdgeProxyServerByTeamId($teamId);
@@ -55,6 +60,12 @@ class EdgeProxyRemoteRouteService
     public function syncServiceWithServers(Service $service, Server $edgeProxyServer, Server $deploymentServer): array
     {
         if ($edgeProxyServer->proxyType() !== ProxyTypes::TRAEFIK->value) {
+            return [];
+        }
+
+        if ($this->isServiceExcludedFromMasterDomainRouting($service)) {
+            $this->deleteRouteFile($edgeProxyServer, $service->uuid);
+
             return [];
         }
 
@@ -213,14 +224,19 @@ class EdgeProxyRemoteRouteService
     public function syncApplication(Application $application): array
     {
         $teamId = $this->extractApplicationTeamId($application);
-        $deploymentServer = $this->resolveApplicationDeploymentServer($application);
 
-        if (! $deploymentServer instanceof Server) {
-            return [];
+        if ($this->isApplicationExcludedFromMasterDomainRouting($application)) {
+            return $this->cleanupApplicationRouteFiles($application);
         }
 
         if (! $this->isMasterDomainRoutingEnabledForTeamId($teamId)) {
             return $this->cleanupApplicationRouteFiles($application);
+        }
+
+        $deploymentServer = $this->resolveApplicationDeploymentServer($application);
+
+        if (! $deploymentServer instanceof Server) {
+            return [];
         }
 
         $edgeProxyServer = $this->resolveEdgeProxyServerByTeamId($teamId);
@@ -243,6 +259,10 @@ class EdgeProxyRemoteRouteService
     public function syncApplicationOnDeploymentServer(Application $application, Server $deploymentServer): array
     {
         $teamId = $this->extractApplicationTeamId($application);
+        if ($this->isApplicationExcludedFromMasterDomainRouting($application)) {
+            return $this->cleanupApplicationRouteFiles($application);
+        }
+
         if (! $this->isMasterDomainRoutingEnabledForTeamId($teamId)) {
             return $this->cleanupApplicationRouteFiles($application);
         }
@@ -267,6 +287,12 @@ class EdgeProxyRemoteRouteService
     public function syncApplicationWithServers(Application $application, Server $edgeProxyServer, Server $deploymentServer): array
     {
         if ($edgeProxyServer->proxyType() !== ProxyTypes::TRAEFIK->value) {
+            return [];
+        }
+
+        if ($this->isApplicationExcludedFromMasterDomainRouting($application)) {
+            $this->deleteRouteFile($edgeProxyServer, $application->uuid, self::APPLICATION_ROUTE_FILE_PREFIX);
+
             return [];
         }
 
@@ -752,7 +778,26 @@ class EdgeProxyRemoteRouteService
 
         return $applications
             ->filter(fn (ServiceApplication $application) => filled($application->fqdn))
+            ->reject(fn (ServiceApplication $application) => (bool) data_get($application, 'exclude_from_master_domain_routing', false))
             ->values();
+    }
+
+    private function isServiceExcludedFromMasterDomainRouting(Service $service): bool
+    {
+        return (bool) data_get($service, 'exclude_from_master_domain_routing', false);
+    }
+
+    private function isApplicationExcludedFromMasterDomainRouting(Application $application): bool
+    {
+        if (! $application->relationLoaded('settings')) {
+            if (! $application->exists) {
+                return false;
+            }
+
+            $application->loadMissing('settings');
+        }
+
+        return (bool) data_get($application->getRelation('settings'), 'exclude_from_master_domain_routing', false);
     }
 
     private function getApplicationDomains(Application $application): Collection

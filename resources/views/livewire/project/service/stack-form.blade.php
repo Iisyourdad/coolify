@@ -24,6 +24,9 @@
         <x-forms.checkbox canGate="update" :canResource="$service" instantSave id="connectToDockerNetwork"
             label="Connect To Predefined Network"
             helper="By default, you do not reach the Coolify defined networks.<br>Starting a docker compose based resource will have an internal network. <br>If you connect to a Coolify defined network, you maybe need to use different internal DNS names to connect to a resource.<br><br>For more information, check <a class='underline dark:text-white' target='_blank' href='https://coolify.io/docs/knowledge-base/docker/compose#connect-to-predefined-networks'>this</a>." />
+        <x-forms.checkbox canGate="update" :canResource="$service" instantSave
+            id="excludeFromMasterDomainRouting" label="Exclude From Master Domain Routing"
+            helper="When enabled, Coolify will not generate master domain routing for this service and will remove any existing generated master router file." />
     </div>
     @if ($fields->count() > 0)
         <div>
