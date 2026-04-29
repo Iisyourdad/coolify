@@ -1237,10 +1237,8 @@ $schema://$host {
         $this->refresh();
         $unreachableNotificationSent = (bool) $this->unreachable_notification_sent;
         $isReachable = (bool) $this->settings->is_reachable;
-        if ($isReachable === true) {
-            $this->unreachable_count = 0;
-            $this->save();
 
+        if ($isReachable === true) {
             if ($unreachableNotificationSent === true) {
                 $this->sendReachableNotification();
             }

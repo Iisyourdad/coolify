@@ -33,6 +33,8 @@ class Show extends Component
 
     public string $port;
 
+    public int $connectionTimeout;
+
     public ?string $validationLogs = null;
 
     public ?string $wildcardDomain = null;
@@ -119,6 +121,7 @@ class Show extends Component
             'ip' => ['required', new ValidServerIp],
             'user' => ['required', 'regex:/^[a-zA-Z0-9_-]+$/'],
             'port' => 'required|integer|between:1,65535',
+            'connectionTimeout' => 'required|integer|min:1|max:300',
             'validationLogs' => 'nullable',
             'wildcardDomain' => 'nullable|url',
             'isReachable' => 'required',
@@ -148,6 +151,10 @@ class Show extends Component
                 'ip.required' => 'The IP Address field is required.',
                 'user.required' => 'The User field is required.',
                 'port.required' => 'The Port field is required.',
+                'connectionTimeout.required' => 'The SSH Connection Timeout field is required.',
+                'connectionTimeout.integer' => 'The SSH Connection Timeout must be an integer.',
+                'connectionTimeout.min' => 'The SSH Connection Timeout must be at least 1 second.',
+                'connectionTimeout.max' => 'The SSH Connection Timeout must not exceed 300 seconds.',
                 'wildcardDomain.url' => 'The Wildcard Domain must be a valid URL.',
                 'sentinelToken.required' => 'The Sentinel Token field is required.',
                 'sentinelMetricsRefreshRateSeconds.required' => 'The Metrics Refresh Rate field is required.',
@@ -221,6 +228,7 @@ class Show extends Component
             $this->server->validation_logs = $this->validationLogs;
             $this->server->save();
 
+            $this->server->settings->connection_timeout = $this->connectionTimeout;
             $this->server->settings->is_swarm_manager = $this->isSwarmManager;
             $this->server->settings->wildcard_domain = $this->wildcardDomain;
             $this->server->settings->is_swarm_worker = $this->isSwarmWorker;
@@ -249,6 +257,7 @@ class Show extends Component
             $this->ip = $this->server->ip;
             $this->user = $this->server->user;
             $this->port = $this->server->port;
+            $this->connectionTimeout = $this->server->settings->connection_timeout;
 
             $this->wildcardDomain = $this->server->settings->wildcard_domain;
             $this->isReachable = $this->server->settings->is_reachable;
@@ -441,7 +450,7 @@ class Show extends Component
                 return;
             }
 
-            $hetznerService = new \App\Services\HetznerService($this->server->cloudProviderToken->token);
+            $hetznerService = new HetznerService($this->server->cloudProviderToken->token);
             $serverData = $hetznerService->getServer($this->server->hetzner_server_id);
 
             $this->hetznerServerStatus = $serverData['status'] ?? null;
@@ -505,7 +514,7 @@ class Show extends Component
                 return;
             }
 
-            $hetznerService = new \App\Services\HetznerService($this->server->cloudProviderToken->token);
+            $hetznerService = new HetznerService($this->server->cloudProviderToken->token);
             $hetznerService->powerOnServer($this->server->hetzner_server_id);
 
             $this->hetznerServerStatus = 'starting';
