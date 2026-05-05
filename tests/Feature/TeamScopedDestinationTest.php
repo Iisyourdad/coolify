@@ -3,6 +3,7 @@
 use App\Livewire\Destination\Show as DestinationShow;
 use App\Livewire\Project\New\DockerCompose;
 use App\Livewire\Project\New\DockerImage;
+use App\Livewire\Project\Shared\Destination as SharedDestination;
 use App\Livewire\Project\New\GithubPrivateRepository;
 use App\Livewire\Project\New\GithubPrivateRepositoryDeployKey;
 use App\Livewire\Project\New\PublicGitRepository;
@@ -293,5 +294,53 @@ describe('Destination/Show team scope', function () {
 
         expect($component->get('destination'))->toBeNull();
         $component->assertRedirect(route('destination.index'));
+    });
+});
+
+describe('Project/Shared/Destination addServer', function () {
+    test('addServer queues a deploy when adding a running application to a brand new node', function () {
+        $application = Application::factory()->create([
+            'environment_id' => $this->environmentA->id,
+            'destination_id' => $this->destinationA->id,
+            'destination_type' => $this->destinationA->getMorphClass(),
+            'status' => 'running:healthy',
+            'docker_registry_image_name' => 'ghcr.io/coollabsio/example:latest',
+        ]);
+
+        $application->additional_networks()->attach($this->destinationB->id, [
+            'server_id' => $this->serverB->id,
+            'status' => 'running:healthy',
+        ]);
+
+        $component = new class extends SharedDestination
+        {
+            public array $redeployCalls = [];
+
+            public function redeploy(int $network_id, int $server_id, bool $onlyThisServer = true)
+            {
+                $this->redeployCalls[] = [
+                    'network_id' => $network_id,
+                    'server_id' => $server_id,
+                    'only_this_server' => $onlyThisServer,
+                ];
+
+                return 'queued';
+            }
+        };
+
+        $component->resource = $application->fresh();
+        $component->addServer($this->destinationB->id, $this->serverB->id);
+
+        expect($component->redeployCalls)->toHaveCount(1)
+            ->and($component->redeployCalls[0]['network_id'])->toBe($this->destinationB->id)
+            ->and($component->redeployCalls[0]['server_id'])->toBe($this->serverB->id)
+            ->and($component->redeployCalls[0]['only_this_server'])->toBeTrue();
+
+        expect($application->fresh()->additional_networks->pluck('id'))->toContain($this->destinationB->id);
+        $this->assertDatabaseHas('additional_destinations', [
+            'application_id' => $application->id,
+            'server_id' => $this->serverB->id,
+            'standalone_docker_id' => $this->destinationB->id,
+        ]);
     });
 });

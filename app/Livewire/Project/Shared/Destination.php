@@ -111,6 +111,7 @@ class Destination extends Component
     public function promote(int $network_id, int $server_id)
     {
         $main_destination = $this->resource->destination;
+
         $this->resource->update([
             'destination_id' => $network_id,
             'destination_type' => StandaloneDocker::class,
@@ -130,8 +131,14 @@ class Destination extends Component
 
     public function addServer(int $network_id, int $server_id)
     {
+        $shouldRedeploy = $this->resource->isRunning();
         $this->resource->additional_networks()->attach($network_id, ['server_id' => $server_id]);
+        $this->resource->refresh();
         $this->dispatch('refresh');
+
+        if ($shouldRedeploy) {
+            return $this->redeploy($network_id, $server_id);
+        }
     }
 
     public function removeServer(int $network_id, int $server_id, $password, $selectedActions = [])
