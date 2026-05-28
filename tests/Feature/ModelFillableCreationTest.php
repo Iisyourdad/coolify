@@ -286,6 +286,7 @@ it('creates ApplicationSetting with all fillable attributes', function () {
         'is_gzip_enabled' => true,
         'is_stripprefix_enabled' => true,
         'connect_to_docker_network' => false,
+        'exclude_from_master_domain_routing' => true,
         'custom_internal_name' => 'my-custom-app',
         'is_container_label_escape_enabled' => true,
         'is_env_sorting_enabled' => true,
@@ -299,6 +300,7 @@ it('creates ApplicationSetting with all fillable attributes', function () {
         'inject_build_args_to_dockerfile' => true,
         'include_source_commit_in_build' => true,
         'docker_images_to_keep' => 5,
+        'stop_grace_period' => 300,
     ]);
 
     expect($setting->exists)->toBeTrue();
@@ -309,6 +311,8 @@ it('creates ApplicationSetting with all fillable attributes', function () {
     expect($setting->custom_internal_name)->toBe('my-custom-app');
     expect($setting->is_spa)->toBeTrue();
     expect($setting->docker_images_to_keep)->toBe(5);
+    expect($setting->exclude_from_master_domain_routing)->toBeTrue();
+    expect($setting->stop_grace_period)->toBe(300);
 });
 
 it('creates ServerSetting with all fillable attributes', function () {
@@ -357,6 +361,7 @@ it('creates ServerSetting with all fillable attributes', function () {
         'is_sentinel_debug_enabled' => false,
         'server_disk_usage_check_frequency' => '*/5 * * * *',
         'is_terminal_enabled' => true,
+        'is_master_domain_router_enabled' => true,
         'deployment_queue_limit' => 10,
         'disable_application_image_retention' => false,
     ]);
@@ -367,6 +372,7 @@ it('creates ServerSetting with all fillable attributes', function () {
     expect($setting->wildcard_domain)->toBe('*.example.com');
     expect($setting->concurrent_builds)->toBe(4);
     expect($setting->sentinel_token)->toBe('sentinel-token-789');
+    expect($setting->is_master_domain_router_enabled)->toBeTrue();
     expect($setting->deployment_queue_limit)->toBe(10);
 });
 

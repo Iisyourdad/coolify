@@ -2,9 +2,10 @@
 
 return [
     'coolify' => [
-        'version' => '4.1.0',
-        'helper_version' => '1.0.13',
-        'realtime_version' => '1.0.14',
+        'version' => '4.1.1',
+        'helper_version' => '1.0.14',
+        'realtime_version' => '1.0.15',
+        'railpack_version' => '0.23.0',
         'self_hosted' => env('SELF_HOSTED', true),
         'autoupdate' => env('AUTOUPDATE'),
         'base_config_path' => env('BASE_CONFIG_PATH', '/data/coolify'),
@@ -75,9 +76,6 @@ return [
     'ssh' => [
         'mux_enabled' => env('MUX_ENABLED', env('SSH_MUX_ENABLED', true)),
         'mux_persist_time' => env('SSH_MUX_PERSIST_TIME', 3600),
-        'mux_health_check_enabled' => env('SSH_MUX_HEALTH_CHECK_ENABLED', true),
-        'mux_health_check_timeout' => env('SSH_MUX_HEALTH_CHECK_TIMEOUT', 5),
-        'mux_max_age' => env('SSH_MUX_MAX_AGE', 1800), // 30 minutes
         'connection_timeout' => 10,
         'server_interval' => 20,
         'command_timeout' => 3600,
@@ -100,6 +98,23 @@ return [
 
     'sentry' => [
         'sentry_dsn' => env('SENTRY_DSN'),
+    ],
+
+    'sentinel' => [
+        // How often (seconds) PushServerUpdateJob is force-dispatched even when
+        // the container state hash is unchanged. Keeps exited-detection and
+        // storage checks from going stale without writing every resource row on
+        // every push.
+        'push_force_interval_seconds' => env('SENTINEL_PUSH_FORCE_INTERVAL_SECONDS', 300),
+
+    ],
+
+    'proxy' => [
+        // How often (seconds) PushServerUpdateJob periodically re-connects the
+        // proxy to Docker networks as a safety net. Real network-layout changes
+        // already connect the proxy on-demand; this only covers gaps (Swarm
+        // networks added via UI, proxy crash recovery).
+        'connect_networks_interval_seconds' => env('PROXY_CONNECT_NETWORKS_INTERVAL_SECONDS', 3600),
     ],
 
     'webhooks' => [
