@@ -353,14 +353,30 @@ function showBoarding(): bool
 function refreshSession(?Team $team = null): void
 {
     if (! $team) {
-        if (Auth::user()->currentTeam()) {
-            $team = Team::find(Auth::user()->currentTeam()->id);
-        } else {
-            $team = User::find(Auth::id())->teams->first();
+        $currentTeam = Auth::user()->currentTeam();
+        if ($currentTeam) {
+            // currentTeam() can resolve a stale (just-deleted) team from the
+            // session/cache, so Team::find() may still return null here.
+            $team = Team::find($currentTeam->id);
+        }
+        if (! $team) {
+            // Fall back to any team the user still belongs to.
+            $team = User::query()->find(Auth::id())?->teams()->first();
         }
     }
+
     // Clear old cache key format for backwards compatibility
     Cache::forget('team:'.Auth::id());
+
+    if (! $team) {
+        // The user has no team left (e.g. just deleted their current team and
+        // belongs to no other): clear the stale session reference instead of
+        // dereferencing null.
+        session()->forget('currentTeam');
+
+        return;
+    }
+
     // Use new cache key format that includes team ID
     Cache::forget('user:'.Auth::id().':team:'.$team->id);
     Cache::remember('user:'.Auth::id().':team:'.$team->id, 3600, function () use ($team) {
@@ -1041,7 +1057,6 @@ function sslip(Server $server)
 
 function get_service_templates(bool $force = false): Collection
 {
-
     if ($force) {
         try {
             $response = Http::retry(3, 1000)->get(config('constants.services.official'));
@@ -1052,15 +1067,16 @@ function get_service_templates(bool $force = false): Collection
 
             return collect($services);
         } catch (Throwable) {
-            $services = File::get(base_path('templates/'.config('constants.services.file_name')));
-
-            return collect(json_decode($services))->sortKeys();
+            return get_service_templates();
         }
-    } else {
-        $services = File::get(base_path('templates/'.config('constants.services.file_name')));
-
-        return collect(json_decode($services))->sortKeys();
     }
+
+    $path = base_path('templates/'.config('constants.services.file_name'));
+    $mtime = filemtime($path) ?: 0;
+
+    return Cache::remember("service-templates:{$mtime}", now()->addDay(), function () use ($path) {
+        return collect(json_decode(File::get($path)))->sortKeys();
+    });
 }
 
 function getResourceByUuid(string $uuid, ?int $teamId = null)
@@ -1858,15 +1874,15 @@ function isBase64Encoded($strValue)
 {
     return base64_encode(base64_decode($strValue, true)) === $strValue;
 }
-function customApiValidator(Collection|array $item, array $rules)
+function customApiValidator(Collection|array $item, array $rules, array $messages = [])
 {
     if (is_array($item)) {
         $item = collect($item);
     }
 
-    return Validator::make($item->toArray(), $rules, [
+    return Validator::make($item->toArray(), $rules, array_merge([
         'required' => 'This field is required.',
-    ]);
+    ], $messages));
 }
 function parseDockerComposeFile(Service|Application $resource, bool $isNew = false, int $pull_request_id = 0, ?int $preview_id = null)
 {

@@ -1055,6 +1055,7 @@ function convertDockerRunToCompose(?string $custom_docker_run_options = null)
         '--ulimit',
         '--device',
         '--shm-size',
+        '--dns',
     ]);
     $mapping = collect([
         '--cap-add' => 'cap_add',
@@ -1068,6 +1069,7 @@ function convertDockerRunToCompose(?string $custom_docker_run_options = null)
         '--ip' => 'ip',
         '--ip6' => 'ip6',
         '--shm-size' => 'shm_size',
+        '--dns' => 'dns',
         '--gpus' => 'gpus',
         '--hostname' => 'hostname',
         '--entrypoint' => 'entrypoint',

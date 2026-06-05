@@ -42,7 +42,7 @@ class StartService
             ]);
             $edgePortForwardWarnings[] = 'Failed to sync edge port forwarding configuration. Check edge proxy connectivity, published ports, and server settings.';
         }
-        if ($stopBeforeStart) {
+        if ($this->shouldStopBeforeStarting($pullLatestImages, $stopBeforeStart)) {
             StopService::run(service: $service, dockerCleanup: false);
         }
         $service->saveComposeConfigs();
@@ -79,7 +79,34 @@ class StartService
                 $commands[] = "docker network connect --alias {$serviceName}-{$service->uuid} {$safeNetwork} {$serviceName}-{$service->uuid} >/dev/null 2>&1 || true";
             }
         }
+        $commands = array_merge($commands, $this->logDrainNetworkConnectCommands($service));
 
         return remote_process($commands, $service->server, type_uuid: $service->uuid, callEventOnFinish: 'ServiceStatusChanged');
+    }
+
+    private function logDrainNetworkConnectCommands(Service $service): array
+    {
+        if (! data_get($service, 'connect_to_docker_network')) {
+            return [];
+        }
+
+        if (! $service->destination?->server?->isLogDrainEnabled()) {
+            return [];
+        }
+
+        $network = data_get($service, 'destination.network');
+
+        if (blank($network)) {
+            return [];
+        }
+
+        return [
+            'docker network connect '.escapeshellarg($network).' coolify-log-drain >/dev/null 2>&1 || true',
+        ];
+    }
+
+    private function shouldStopBeforeStarting(bool $pullLatestImages, bool $stopBeforeStart): bool
+    {
+        return $stopBeforeStart && ! $pullLatestImages;
     }
 }
