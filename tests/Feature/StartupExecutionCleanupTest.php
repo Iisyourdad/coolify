@@ -12,9 +12,12 @@ use App\Models\ScheduledDatabaseBackupExecution;
 use App\Models\ScheduledTask;
 use App\Models\ScheduledTaskExecution;
 use App\Models\Server;
+use App\Models\Service;
 use App\Models\StandaloneDocker;
 use App\Models\StandalonePostgresql;
 use App\Models\Team;
+use App\Services\EdgeProxyRemotePortForwardService;
+use App\Services\EdgeProxyRemoteRouteService;
 use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Artisan;
@@ -354,4 +357,94 @@ test('cleanup does not send notifications', function () {
 
     // Assert NO notifications were sent despite team having notification settings
     Notification::assertNothingSent();
+});
+
+test('app:init rebuilds master domain routing for resources whose team has a master domain router', function () {
+    // Team A has a master domain router enabled -> its resources must be reconciled on startup.
+    $teamA = Team::factory()->create();
+    $edgeServer = Server::factory()->create([
+        'team_id' => $teamA->id,
+        'ip' => '10.10.0.1',
+    ]);
+    // Enable the master domain router on the column directly to bypass the
+    // Traefik/single-router save hooks; the startup rebuild only keys off this flag.
+    $edgeServer->settings->forceFill(['is_master_domain_router_enabled' => true])->saveQuietly();
+
+    $destinationA = StandaloneDocker::where('server_id', $edgeServer->id)->firstOrFail();
+    $projectA = Project::factory()->create(['team_id' => $teamA->id]);
+    $environmentA = Environment::factory()->create(['project_id' => $projectA->id]);
+
+    $masterApp = Application::forceCreate([
+        'name' => 'master-routed-app',
+        'git_repository' => 'https://example.com/master-routed.git',
+        'git_branch' => 'main',
+        'build_pack' => 'nixpacks',
+        'ports_exposes' => '3000',
+        'fqdn' => 'https://master-app.example.com',
+        'environment_id' => $environmentA->id,
+        'destination_id' => $destinationA->id,
+        'destination_type' => $destinationA->getMorphClass(),
+    ]);
+
+    $masterService = Service::factory()->create([
+        'environment_id' => $environmentA->id,
+        'destination_id' => $destinationA->id,
+        'destination_type' => StandaloneDocker::class,
+    ]);
+
+    // Team B has no master domain router -> its resources must be left untouched.
+    $teamB = Team::factory()->create();
+    $serverB = Server::factory()->create([
+        'team_id' => $teamB->id,
+        'ip' => '10.20.0.1',
+    ]);
+    $destinationB = StandaloneDocker::where('server_id', $serverB->id)->firstOrFail();
+    $projectB = Project::factory()->create(['team_id' => $teamB->id]);
+    $environmentB = Environment::factory()->create(['project_id' => $projectB->id]);
+
+    $nonMasterApp = Application::forceCreate([
+        'name' => 'non-master-routed-app',
+        'git_repository' => 'https://example.com/non-master-routed.git',
+        'git_branch' => 'main',
+        'build_pack' => 'nixpacks',
+        'ports_exposes' => '3000',
+        'fqdn' => 'https://non-master-app.example.com',
+        'environment_id' => $environmentB->id,
+        'destination_id' => $destinationB->id,
+        'destination_type' => $destinationB->getMorphClass(),
+    ]);
+
+    $routeService = Mockery::mock(EdgeProxyRemoteRouteService::class);
+    $routeService->shouldReceive('syncApplication')
+        ->once()
+        ->with(Mockery::on(fn ($application) => $application->id === $masterApp->id))
+        ->andReturn([]);
+    $routeService->shouldReceive('syncService')
+        ->once()
+        ->with(Mockery::on(fn ($service) => $service->id === $masterService->id))
+        ->andReturn([]);
+    $routeService->shouldReceive('syncApplication')
+        ->with(Mockery::on(fn ($application) => $application->id === $nonMasterApp->id))
+        ->never();
+    app()->instance(EdgeProxyRemoteRouteService::class, $routeService);
+
+    $portForwardService = Mockery::mock(EdgeProxyRemotePortForwardService::class);
+    $portForwardService->shouldReceive('syncApplication')
+        ->once()
+        ->with(Mockery::on(fn ($application) => $application->id === $masterApp->id))
+        ->andReturn([]);
+    $portForwardService->shouldReceive('syncService')
+        ->once()
+        ->with(Mockery::on(fn ($service) => $service->id === $masterService->id))
+        ->andReturn([]);
+    $portForwardService->shouldReceive('syncApplication')
+        ->with(Mockery::on(fn ($application) => $application->id === $nonMasterApp->id))
+        ->never();
+    app()->instance(EdgeProxyRemotePortForwardService::class, $portForwardService);
+
+    Artisan::call('app:init');
+
+    // Mockery expectations are verified on teardown; reaching here means the
+    // master-routed resources were reconciled and the non-master app was skipped.
+    expect(true)->toBeTrue();
 });

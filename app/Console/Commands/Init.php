@@ -6,6 +6,7 @@ use App\Enums\ActivityTypes;
 use App\Enums\ApplicationDeploymentStatus;
 use App\Jobs\CheckHelperImageJob;
 use App\Jobs\PullChangelog;
+use App\Models\Application;
 use App\Models\ApplicationDeploymentQueue;
 use App\Models\Environment;
 use App\Models\InstanceSettings;
@@ -13,10 +14,14 @@ use App\Models\ScheduledDatabaseBackup;
 use App\Models\ScheduledDatabaseBackupExecution;
 use App\Models\ScheduledTaskExecution;
 use App\Models\Server;
+use App\Models\Service;
 use App\Models\StandalonePostgresql;
 use App\Models\User;
+use App\Services\EdgeProxyRemotePortForwardService;
+use App\Services\EdgeProxyRemoteRouteService;
 use Carbon\Carbon;
 use Illuminate\Console\Command;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
@@ -142,6 +147,12 @@ class Init extends Command
             echo "Could not setup dynamic configuration: {$e->getMessage()}\n";
         }
 
+        try {
+            $this->rebuildRemoteProxyConfigurations();
+        } catch (\Throwable $e) {
+            echo "Could not rebuild remote proxy configurations: {$e->getMessage()}\n";
+        }
+
         if (! is_null(config('constants.coolify.autoupdate', null))) {
             if (config('constants.coolify.autoupdate') == true) {
                 echo "Enabling auto-update\n";
@@ -201,6 +212,79 @@ class Init extends Command
         }
 
         echo "Rescanned queued deployments on {$servers->count()} servers\n";
+    }
+
+    /**
+     * Regenerate the master-domain (edge) route and port-forward files for every
+     * application and service on a Coolify restart/update.
+     *
+     * This is what lets an already-connected server pick up master-domain routing
+     * without being disconnected/reconnected or every resource being redeployed:
+     * once an instance is updated, app:init reconciles the generated files on the
+     * edge proxy. Only teams that actually have a master domain router enabled are
+     * reconciled, to avoid needless SSH work for everyone else. The per-resource
+     * sync methods are idempotent and remove stale files when routing no longer
+     * applies, so re-running this on every startup is safe.
+     */
+    private function rebuildRemoteProxyConfigurations(): void
+    {
+        $masterRoutingTeamIds = Server::query()
+            ->whereRelation('settings', 'is_master_domain_router_enabled', true)
+            ->pluck('team_id')
+            ->filter()
+            ->map(fn ($teamId) => (int) $teamId)
+            ->unique()
+            ->values();
+
+        if ($masterRoutingTeamIds->isEmpty()) {
+            return;
+        }
+
+        $routeService = app(EdgeProxyRemoteRouteService::class);
+        $portForwardService = app(EdgeProxyRemotePortForwardService::class);
+        $rebuiltCount = 0;
+
+        Application::query()
+            ->with(['destination.server', 'environment.project', 'settings'])
+            ->chunkById(100, function (Collection $applications) use ($routeService, $portForwardService, $masterRoutingTeamIds, &$rebuiltCount) {
+                foreach ($applications as $application) {
+                    $teamId = data_get($application, 'environment.project.team_id');
+                    if (is_null($teamId) || ! $masterRoutingTeamIds->contains((int) $teamId)) {
+                        continue;
+                    }
+
+                    try {
+                        $routeService->syncApplication($application);
+                        $portForwardService->syncApplication($application);
+                        $rebuiltCount++;
+                    } catch (\Throwable $e) {
+                        echo "Could not rebuild remote proxy configuration for application {$application->uuid}: {$e->getMessage()}\n";
+                    }
+                }
+            });
+
+        Service::query()
+            ->with(['destination.server', 'environment.project', 'server', 'applications'])
+            ->chunkById(100, function (Collection $services) use ($routeService, $portForwardService, $masterRoutingTeamIds, &$rebuiltCount) {
+                foreach ($services as $service) {
+                    $teamId = data_get($service, 'environment.project.team_id');
+                    if (is_null($teamId) || ! $masterRoutingTeamIds->contains((int) $teamId)) {
+                        continue;
+                    }
+
+                    try {
+                        $routeService->syncService($service);
+                        $portForwardService->syncService($service);
+                        $rebuiltCount++;
+                    } catch (\Throwable $e) {
+                        echo "Could not rebuild remote proxy configuration for service {$service->uuid}: {$e->getMessage()}\n";
+                    }
+                }
+            });
+
+        if ($rebuiltCount > 0) {
+            echo "Rebuilt remote proxy configurations for {$rebuiltCount} resources\n";
+        }
     }
 
     private function pullTemplatesFromCDN()
