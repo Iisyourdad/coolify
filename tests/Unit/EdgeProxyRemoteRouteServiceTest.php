@@ -1985,3 +1985,49 @@ it('returns cleanup failure details when deleting service edge route files hits 
         ->and($failures[0])->toContain('edge-unreachable (301)')
         ->and($failures[0])->toContain('No route to host');
 });
+
+it('prunes orphan edge route files whose resource no longer exists and keeps valid ones', function () {
+    $manager = new class extends EdgeProxyRemoteRouteService
+    {
+        public string $listing = '';
+
+        public array $deleteCommands = [];
+
+        protected function runRemoteCommands(Server $server, array $commands, bool $throwError = true): ?string
+        {
+            $joined = implode("\n", $commands);
+            if (str_contains($joined, 'ls -1')) {
+                return $this->listing;
+            }
+
+            $this->deleteCommands[] = $joined;
+
+            return null;
+        }
+    };
+
+    $manager->listing = implode("\n", [
+        'application-remote-keepapp.yaml',
+        'application-remote-deletedapp.yaml',
+        'service-remote-keepservice.yaml',
+        'service-remote-deletedservice.yaml',
+        'application-remote-deletedapp.yaml.tmp', // not a .yaml route file -> ignored
+        'some-unrelated-file.yaml',               // no remote prefix -> ignored
+    ]);
+
+    $edgeProxyServer = Mockery::mock(Server::class)->makePartial();
+    $edgeProxyServer->id = 0;
+    $edgeProxyServer->shouldReceive('proxyType')->andReturn('TRAEFIK');
+    $edgeProxyServer->shouldReceive('proxyPath')->andReturn('/tmp/proxy');
+
+    $warnings = $manager->pruneOrphanRouteFiles($edgeProxyServer, ['keepapp'], ['keepservice']);
+
+    expect($warnings)->toHaveCount(2);
+
+    $deletes = implode("\n", $manager->deleteCommands);
+    expect($deletes)->toContain("/tmp/proxy/dynamic/application-remote-deletedapp.yaml")
+        ->and($deletes)->toContain('/tmp/proxy/dynamic/service-remote-deletedservice.yaml')
+        ->and($deletes)->not->toContain('keepapp')
+        ->and($deletes)->not->toContain('keepservice')
+        ->and($deletes)->not->toContain('some-unrelated-file');
+});

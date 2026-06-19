@@ -285,6 +285,40 @@ class Init extends Command
         if ($rebuiltCount > 0) {
             echo "Rebuilt remote proxy configurations for {$rebuiltCount} resources\n";
         }
+
+        $this->pruneOrphanRemoteProxyConfigurations($routeService);
+    }
+
+    /**
+     * Remove generated edge route files for resources that no longer exist, so deleted
+     * applications/services stop returning 503 from the master domain router.
+     */
+    private function pruneOrphanRemoteProxyConfigurations(EdgeProxyRemoteRouteService $routeService): void
+    {
+        $edgeProxyServers = Server::query()
+            ->whereRelation('settings', 'is_master_domain_router_enabled', true)
+            ->get();
+
+        if ($edgeProxyServers->isEmpty()) {
+            return;
+        }
+
+        $validApplicationUuids = Application::query()->pluck('uuid')->all();
+        $validServiceUuids = Service::query()->pluck('uuid')->all();
+        $prunedCount = 0;
+
+        foreach ($edgeProxyServers as $edgeProxyServer) {
+            try {
+                $warnings = $routeService->pruneOrphanRouteFiles($edgeProxyServer, $validApplicationUuids, $validServiceUuids);
+                $prunedCount += count($warnings);
+            } catch (\Throwable $e) {
+                echo "Could not prune orphan edge route files on server {$edgeProxyServer->id}: {$e->getMessage()}\n";
+            }
+        }
+
+        if ($prunedCount > 0) {
+            echo "Pruned {$prunedCount} orphan edge route files\n";
+        }
     }
 
     private function pullTemplatesFromCDN()

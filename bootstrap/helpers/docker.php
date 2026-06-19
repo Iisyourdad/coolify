@@ -609,7 +609,10 @@ function fqdnLabelsForTraefik(string $uuid, Collection $domains, bool $is_force_
                     }
                 }
                 $labels->push("traefik.http.routers.{$https_label}.tls=true");
-                if ($use_public_cert_resolver) {
+                // Let's Encrypt cannot issue certificates for bare IP addresses. Requesting one
+                // makes Traefik retry ACME indefinitely and floods the proxy logs with rejected-order
+                // errors, so skip the resolver for IP literals and let Traefik serve its default cert.
+                if ($use_public_cert_resolver && filter_var($host, FILTER_VALIDATE_IP) === false) {
                     $labels->push("traefik.http.routers.{$https_label}.tls.certresolver=".traefikCertResolverName());
                 }
 

@@ -523,6 +523,75 @@ class EdgeProxyRemoteRouteService
             ->all();
     }
 
+    /**
+     * Remove generated remote route files on the edge proxy whose backing resource no longer exists.
+     *
+     * When an application or service is deleted, its delete job removes the route file; but files can
+     * still be orphaned (deletes that happened before this feature existed, failed cleanups, or renamed
+     * resources). Those orphans keep matching in Traefik and return 503s. This reconciles the directory
+     * against the set of resources that currently exist.
+     *
+     * @param  array<int, string>  $validApplicationUuids
+     * @param  array<int, string>  $validServiceUuids
+     * @return array<int, string>
+     */
+    public function pruneOrphanRouteFiles(Server $edgeProxyServer, array $validApplicationUuids, array $validServiceUuids): array
+    {
+        if ($edgeProxyServer->proxyType() !== ProxyTypes::TRAEFIK->value) {
+            return [];
+        }
+
+        $escapedDirectory = escapeshellarg($this->routeDirectoryPath($edgeProxyServer));
+
+        try {
+            $listing = $this->runRemoteCommands($edgeProxyServer, [
+                "ls -1 $escapedDirectory 2>/dev/null || true",
+            ], false);
+        } catch (\Throwable $exception) {
+            return [sprintf(
+                'Failed to list edge proxy dynamic directory on server %s (%d): %s',
+                $edgeProxyServer->name,
+                $edgeProxyServer->id,
+                $exception->getMessage()
+            )];
+        }
+
+        if (blank($listing)) {
+            return [];
+        }
+
+        $validApplicationUuids = array_flip($validApplicationUuids);
+        $validServiceUuids = array_flip($validServiceUuids);
+        $warnings = [];
+
+        foreach (preg_split('/\r?\n/', trim($listing)) ?: [] as $fileName) {
+            $fileName = trim($fileName);
+            if ($fileName === '' || ! str_ends_with($fileName, '.yaml')) {
+                continue;
+            }
+
+            if (str_starts_with($fileName, self::APPLICATION_ROUTE_FILE_PREFIX)) {
+                $uuid = Str::of($fileName)->after(self::APPLICATION_ROUTE_FILE_PREFIX)->beforeLast('.yaml')->value();
+                if ($uuid !== '' && ! isset($validApplicationUuids[$uuid])) {
+                    $this->deleteRouteFile($edgeProxyServer, $uuid, self::APPLICATION_ROUTE_FILE_PREFIX, false);
+                    $warnings[] = sprintf('Removed orphan edge route file %s on server %d (application no longer exists).', $fileName, $edgeProxyServer->id);
+                }
+            } elseif (str_starts_with($fileName, self::SERVICE_ROUTE_FILE_PREFIX)) {
+                $uuid = Str::of($fileName)->after(self::SERVICE_ROUTE_FILE_PREFIX)->beforeLast('.yaml')->value();
+                if ($uuid !== '' && ! isset($validServiceUuids[$uuid])) {
+                    $this->deleteRouteFile($edgeProxyServer, $uuid, self::SERVICE_ROUTE_FILE_PREFIX, false);
+                    $warnings[] = sprintf('Removed orphan edge route file %s on server %d (service no longer exists).', $fileName, $edgeProxyServer->id);
+                }
+            }
+        }
+
+        foreach ($warnings as $warning) {
+            $this->logWarning($warning);
+        }
+
+        return $warnings;
+    }
+
     public function generateTraefikConfig(string $serviceUuid, array $routes): array
     {
         $serviceKey = Str::slug($serviceUuid);
