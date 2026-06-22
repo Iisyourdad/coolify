@@ -98,7 +98,7 @@
     </x-slide-over>
     <h1>{{ $title }}</h1>
     <x-resources.breadcrumbs :resource="$service" :parameters="$parameters" />
-    <div class="navbar-main" x-data">
+    <div class="navbar-main" x-data>
         <div class="mb-4 w-full md:mb-0 md:hidden">
             @if ($service->isDeployable)
                 <div id="service-mobile-actions" class="mt-2 mb-3 md:hidden">
