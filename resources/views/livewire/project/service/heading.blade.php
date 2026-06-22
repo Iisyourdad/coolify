@@ -530,9 +530,11 @@
                     );
                     return;
                 }
+                window.dispatchEvent(new CustomEvent('startservice'));
                 $wire.$call('start');
             });
             $wire.$on('forceDeployEvent', () => {
+                window.dispatchEvent(new CustomEvent('startservice'));
                 $wire.$call('forceDeploy');
             });
             $wire.$on('restartEvent', async () => {
@@ -543,11 +545,13 @@
                     );
                     return;
                 }
+                window.dispatchEvent(new CustomEvent('startservice'));
                 $wire.$dispatch('info',
                     'Gracefully stopping service.<br/><br/>It could take a while depending on the service.');
                 $wire.$call('restart');
             });
             $wire.$on('pullAndRestartEvent', () => {
+                window.dispatchEvent(new CustomEvent('startservice'));
                 $wire.$dispatch('info', 'Pulling new images and restarting service.');
                 $wire.$call('pullAndRestartEvent');
             });
