@@ -19,8 +19,6 @@ use App\Models\StandaloneDocker;
 use App\Models\SwarmDocker;
 use App\Notifications\Application\DeploymentFailed;
 use App\Notifications\Application\DeploymentSuccess;
-use App\Services\EdgeProxyRemotePortForwardService;
-use App\Services\EdgeProxyRemoteRouteService;
 use App\Support\ValidationPatterns;
 use App\Traits\EnvironmentVariableAnalyzer;
 use App\Traits\ExecuteRemoteCommand;
@@ -548,30 +546,10 @@ class ApplicationDeploymentJob implements ShouldBeEncrypted, ShouldQueue
         // Intentionally skip preview deployments here; preview routing has separate lifecycle/hostnames.
         if ($this->pull_request_id === 0) {
             try {
-                $edgeRoutingWarnings = app(EdgeProxyRemoteRouteService::class)
-                    ->syncApplicationOnDeploymentServer($this->application, $this->mainServer);
-                foreach ($edgeRoutingWarnings as $warning) {
-                    $this->application_deployment_queue->addLogEntry("Edge proxy routing warning: {$warning}", 'stderr');
-                }
-            } catch (\Throwable $e) {
-                \Log::warning('Failed to sync edge proxy route for application deployment '.$this->deployment_uuid.': '.$e->getMessage());
-                $this->application_deployment_queue->addLogEntry(
-                    'Edge proxy routing warning: Failed to sync edge proxy route configuration. Check master domain server settings and edge proxy connectivity.',
-                    'stderr'
-                );
-            }
-
-            try {
-                $edgePortForwardWarnings = app(EdgeProxyRemotePortForwardService::class)
-                    ->syncApplicationOnDeploymentServer($this->application, $this->mainServer);
-                foreach ($edgePortForwardWarnings as $warning) {
-                    $this->application_deployment_queue->addLogEntry("Edge port forwarding warning: {$warning}", 'stderr');
-                }
-            } catch (\Throwable $e) {
-                \Log::warning('Failed to sync edge port forwarding for application deployment '.$this->deployment_uuid.': '.$e->getMessage());
-                $this->application_deployment_queue->addLogEntry(
-                    'Edge port forwarding warning: Failed to sync edge port forwarding configuration. Check master domain server settings, published ports, and edge proxy connectivity.',
-                    'stderr'
+                SyncApplicationEdgeProxyJob::dispatch($this->application);
+            } catch (Throwable $e) {
+                \Log::warning(
+                    'Failed to queue edge proxy sync for application deployment '.$this->deployment_uuid.': '.$e->getMessage()
                 );
             }
         }

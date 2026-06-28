@@ -5,7 +5,9 @@ use App\Actions\Database\StartDatabaseProxy;
 use App\Actions\Service\StartService;
 use App\Jobs\DatabaseBackupJob;
 use App\Jobs\ScheduledJobManager;
+use App\Jobs\SyncServiceEdgeProxyJob;
 use App\Models\ScheduledDatabaseBackup;
+use App\Models\Service;
 
 describe('deployment_queue helper', function () {
     test('uses the high queue on self-hosted', function () {
@@ -42,9 +44,14 @@ describe('start action job routing', function () {
         expect($actionClass::makeJob()->queue)->toBe('deployments');
     })->with([
         StartDatabase::class,
-        StartDatabaseProxy::class,
         StartService::class,
     ]);
+
+    test('routes database proxy starts to the high queue on cloud', function () {
+        config(['constants.coolify.self_hosted' => false]);
+
+        expect(StartDatabaseProxy::makeJob()->queue)->toBe('high');
+    });
 
     test('routes to the high queue on self-hosted', function (string $actionClass) {
         config(['constants.coolify.self_hosted' => true]);
@@ -70,5 +77,11 @@ describe('scheduled job routing', function () {
 
         expect((new ScheduledJobManager)->queue)->toBe('high');
         expect((new DatabaseBackupJob(new ScheduledDatabaseBackup))->queue)->toBe('high');
+    });
+});
+
+describe('service edge proxy sync routing', function () {
+    test('uses the high queue regardless of hosting mode', function () {
+        expect((new SyncServiceEdgeProxyJob(new Service))->queue)->toBe('high');
     });
 });

@@ -2,9 +2,8 @@
 
 namespace App\Actions\Service;
 
+use App\Jobs\SyncServiceEdgeProxyJob;
 use App\Models\Service;
-use App\Services\EdgeProxyRemotePortForwardService;
-use App\Services\EdgeProxyRemoteRouteService;
 use Illuminate\Support\Facades\Log;
 use Lorisleiva\Actions\Concerns\AsAction;
 use Lorisleiva\Actions\Decorators\JobDecorator;
@@ -22,26 +21,6 @@ class StartService
     public function handle(Service $service, bool $pullLatestImages = false, bool $stopBeforeStart = false)
     {
         $service->parse();
-        $edgeRoutingWarnings = [];
-        $edgePortForwardWarnings = [];
-        try {
-            $edgeRoutingWarnings = app(EdgeProxyRemoteRouteService::class)->syncService($service);
-        } catch (\Throwable $exception) {
-            Log::warning('Failed to sync edge proxy route for service start.', [
-                'service_uuid' => $service->uuid,
-                'error' => $exception->getMessage(),
-            ]);
-            $edgeRoutingWarnings[] = 'Failed to sync edge proxy route configuration. Check edge proxy connectivity and server settings.';
-        }
-        try {
-            $edgePortForwardWarnings = app(EdgeProxyRemotePortForwardService::class)->syncService($service);
-        } catch (\Throwable $exception) {
-            Log::warning('Failed to sync edge port forwarding for service start.', [
-                'service_uuid' => $service->uuid,
-                'error' => $exception->getMessage(),
-            ]);
-            $edgePortForwardWarnings[] = 'Failed to sync edge port forwarding configuration. Check edge proxy connectivity, published ports, and server settings.';
-        }
         if ($this->shouldStopBeforeStarting($pullLatestImages, $stopBeforeStart)) {
             StopService::run(service: $service, dockerCleanup: false);
         }
@@ -50,12 +29,6 @@ class StartService
         $workdir = $service->workdir();
         // $commands[] = "cd {$workdir}";
         $commands[] = "echo 'Saved configuration files to {$workdir}.'";
-        foreach ($edgeRoutingWarnings as $warning) {
-            $commands[] = 'echo '.escapeshellarg("Edge proxy routing warning: {$warning}");
-        }
-        foreach ($edgePortForwardWarnings as $warning) {
-            $commands[] = 'echo '.escapeshellarg("Edge port forwarding warning: {$warning}");
-        }
         // Ensure .env exists in the correct directory before docker compose tries to load it
         // This is defensive programming - saveComposeConfigs() already creates it,
         // but we guarantee it here in case of any edge cases or manual deployments
@@ -81,7 +54,20 @@ class StartService
         }
         $commands = array_merge($commands, $this->logDrainNetworkConnectCommands($service));
 
-        return remote_process($commands, $service->server, type_uuid: $service->uuid, callEventOnFinish: 'ServiceStatusChanged');
+        try {
+            $activity = remote_process($commands, $service->server, type_uuid: $service->uuid, callEventOnFinish: 'ServiceStatusChanged');
+        } finally {
+            try {
+                SyncServiceEdgeProxyJob::dispatch($service);
+            } catch (\Throwable $exception) {
+                Log::warning('Failed to queue edge proxy sync for service start.', [
+                    'service_uuid' => $service->uuid,
+                    'error' => $exception->getMessage(),
+                ]);
+            }
+        }
+
+        return $activity;
     }
 
     private function logDrainNetworkConnectCommands(Service $service): array
