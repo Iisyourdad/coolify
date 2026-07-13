@@ -5,7 +5,9 @@ use App\Actions\Database\StartDatabaseProxy;
 use App\Actions\Service\StartService;
 use App\Jobs\DatabaseBackupJob;
 use App\Jobs\ScheduledJobManager;
+use App\Jobs\SyncApplicationEdgeProxyJob;
 use App\Jobs\SyncServiceEdgeProxyJob;
+use App\Models\Application;
 use App\Models\ScheduledDatabaseBackup;
 use App\Models\Service;
 
@@ -83,5 +85,11 @@ describe('scheduled job routing', function () {
 describe('service edge proxy sync routing', function () {
     test('uses the high queue regardless of hosting mode', function () {
         expect((new SyncServiceEdgeProxyJob(new Service))->queue)->toBe('high');
+    });
+});
+
+describe('application edge proxy sync routing', function () {
+    test('uses the high queue regardless of hosting mode', function () {
+        expect((new SyncApplicationEdgeProxyJob(new Application))->queue)->toBe('high');
     });
 });

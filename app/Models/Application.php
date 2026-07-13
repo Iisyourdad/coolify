@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\ApplicationDeploymentStatus;
+use App\Jobs\SyncApplicationEdgeProxyJob;
 use App\Services\ConfigurationGenerator;
 use App\Services\DeploymentConfiguration\ApplicationConfigurationSnapshot;
 use App\Services\DeploymentConfiguration\ConfigurationDiff;
@@ -119,6 +120,17 @@ class Application extends BaseModel
     use ClearsGlobalSearchCache, HasConfiguration, HasFactory, HasMetrics, HasSafeStringAttribute, SoftDeletes;
 
     private static $parserVersion = '5';
+
+    private const EDGE_PROXY_SYNC_ATTRIBUTES = [
+        'fqdn',
+        'docker_compose_domains',
+        'docker_compose_raw',
+        'ports_exposes',
+        'ports_mappings',
+        'destination_id',
+        'destination_type',
+        'build_pack',
+    ];
 
     protected $fillable = [
         'name',
@@ -343,7 +355,7 @@ class Application extends BaseModel
                 'application_id' => $application->id,
             ]);
             $application->compose_parsing_version = self::$parserVersion;
-            $application->save();
+            $application->saveQuietly();
 
             // Add default NIXPACKS_NODE_VERSION environment variable for Nixpacks applications
             if ($application->build_pack === 'nixpacks') {
@@ -359,6 +371,24 @@ class Application extends BaseModel
                     'resourceable_id' => $application->id,
                 ]);
             }
+
+            $application->queueEdgeProxySyncIfNeeded(requireDomain: true);
+        });
+        static::updated(function ($application) {
+            if (! $application->wasChanged(self::EDGE_PROXY_SYNC_ATTRIBUTES)) {
+                return;
+            }
+
+            if (
+                ! $application->hasConfiguredDomainForEdgeProxy() &&
+                ! $application->wasChanged(['fqdn', 'docker_compose_domains'])
+            ) {
+                return;
+            }
+
+            $application->queueEdgeProxySyncIfNeeded(
+                allowMasterDeployment: $application->wasChanged(['destination_id', 'destination_type'])
+            );
         });
         static::forceDeleting(function ($application) {
             $application->update(['fqdn' => null]);
@@ -375,6 +405,54 @@ class Application extends BaseModel
                 $deployment->delete();
             }
         });
+    }
+
+    private function queueEdgeProxySyncIfNeeded(bool $requireDomain = false, bool $allowMasterDeployment = false): void
+    {
+        if ($requireDomain && ! $this->hasConfiguredDomainForEdgeProxy()) {
+            return;
+        }
+
+        $this->loadMissing('environment.project');
+        $teamId = data_get($this, 'environment.project.team_id');
+        if (is_null($teamId)) {
+            return;
+        }
+
+        $masterDomainRouterId = Server::query()
+            ->where('team_id', $teamId)
+            ->whereRelation('settings', 'is_master_domain_router_enabled', true)
+            ->value('id');
+
+        if (is_null($masterDomainRouterId)) {
+            return;
+        }
+
+        $this->loadMissing('destination');
+        $deploymentServerId = data_get($this, 'destination.server_id');
+        if (
+            ! $allowMasterDeployment &&
+            ! is_null($deploymentServerId) &&
+            (int) $deploymentServerId === (int) $masterDomainRouterId
+        ) {
+            return;
+        }
+
+        SyncApplicationEdgeProxyJob::dispatch($this);
+    }
+
+    private function hasConfiguredDomainForEdgeProxy(): bool
+    {
+        if ($this->build_pack !== 'dockercompose') {
+            return filled($this->fqdn);
+        }
+
+        return collect(json_decode((string) $this->docker_compose_domains, true))
+            ->contains(function (mixed $domainConfig): bool {
+                $domain = is_string($domainConfig) ? $domainConfig : data_get($domainConfig, 'domain');
+
+                return filled($domain);
+            });
     }
 
     public function customNetworkAliases(): Attribute

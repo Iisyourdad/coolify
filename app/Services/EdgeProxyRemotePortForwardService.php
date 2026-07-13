@@ -401,7 +401,7 @@ class EdgeProxyRemotePortForwardService
         $escapedContainerName = escapeshellarg($this->proxyContainerName($resourceType, $resourceUuid));
 
         $this->runRemoteCommands($edgeProxyServer, [
-            "docker rm -f $escapedContainerName",
+            "docker rm -f $escapedContainerName >/dev/null 2>&1 || true",
         ], $throwError);
     }
 

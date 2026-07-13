@@ -1,5 +1,9 @@
 <?php
 
+use Tests\TestCase;
+
+uses(TestCase::class);
+
 // Regression coverage for the ACME cert-resolver spam: Let's Encrypt rejects orders for bare
 // IP addresses, so Traefik must not be told to resolve a certificate for an IP-literal host.
 

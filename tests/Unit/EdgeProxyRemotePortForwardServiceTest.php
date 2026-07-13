@@ -444,7 +444,8 @@ it('deletes application edge port proxy containers', function () {
 
     expect($manager->calls)->toHaveCount(1)
         ->and($manager->calls[0]['server_id'])->toBe(51)
-        ->and($manager->calls[0]['commands'][0])->toContain('application-application-delete-port-proxy-edge-port-proxy');
+        ->and($manager->calls[0]['commands'][0])->toContain('application-application-delete-port-proxy-edge-port-proxy')
+        ->and($manager->calls[0]['commands'][0])->toEndWith('>/dev/null 2>&1 || true');
 });
 
 it('deletes service edge port proxy containers from all team traefik servers', function () {

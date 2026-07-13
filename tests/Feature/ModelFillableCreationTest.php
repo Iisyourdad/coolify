@@ -1,5 +1,6 @@
 <?php
 
+use App\Enums\ProxyTypes;
 use App\Models\Application;
 use App\Models\ApplicationPreview;
 use App\Models\ApplicationSetting;
@@ -320,6 +321,9 @@ it('creates ApplicationSetting with all fillable attributes', function () {
 });
 
 it('creates ServerSetting with all fillable attributes', function () {
+    $this->server->proxy->set('type', ProxyTypes::TRAEFIK->value);
+    $this->server->save();
+
     // Delete auto-created setting
     ServerSetting::where('server_id', $this->server->id)->delete();
 

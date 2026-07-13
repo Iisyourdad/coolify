@@ -561,7 +561,7 @@ class ApplicationDeploymentJob implements ShouldBeEncrypted, ShouldQueue
         // Intentionally skip preview deployments here; preview routing has separate lifecycle/hostnames.
         if ($this->pull_request_id === 0) {
             try {
-                SyncApplicationEdgeProxyJob::dispatch($this->application);
+                SyncApplicationEdgeProxyJob::dispatch($this->application, $this->mainServer);
             } catch (Throwable $e) {
                 \Log::warning(
                     'Failed to queue edge proxy sync for application deployment '.$this->deployment_uuid.': '.$e->getMessage()

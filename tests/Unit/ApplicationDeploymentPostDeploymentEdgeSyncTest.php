@@ -10,7 +10,7 @@ describe('deployment job structure: edge proxy sync after deployment', function 
 
         expect($methodBlock)
             ->toContain('if ($this->pull_request_id === 0)')
-            ->toContain('SyncApplicationEdgeProxyJob::dispatch($this->application);')
+            ->toContain('SyncApplicationEdgeProxyJob::dispatch($this->application, $this->mainServer);')
             ->not->toContain('syncApplicationOnDeploymentServer');
     });
 });
