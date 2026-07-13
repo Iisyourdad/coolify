@@ -36,6 +36,7 @@ function parseCommandsByLineForSudo(Collection $commands, Server $server): array
             'local',
             'readonly',
             'return',
+            'set',
             'true',
             'if',
             'fi',

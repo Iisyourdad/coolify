@@ -75,7 +75,19 @@ it('mirrors application published tcp ports onto the edge server for remote depl
         ->toBe(['25565:25565'])
         ->and(collect($manager->calls[0]['commands'])->contains(
             fn (string $command) => str_contains($command, 'docker compose') && str_contains($command, ' pull')
-        ))->toBeFalse();
+        ))->toBeFalse()
+        ->and(collect($manager->calls[0]['commands'])->contains(
+            fn (string $command) => str_contains($command, 'docker compose') && str_contains($command, '--force-recreate')
+        ))->toBeTrue()
+        ->and(collect($manager->calls[0]['commands'])->contains(
+            fn (string $command) => str_contains($command, 'docker exec') && str_contains($command, 'nginx -t')
+        ))->toBeTrue()
+        ->and(collect($manager->calls[0]['commands'])->contains(
+            fn (string $command) => str_contains($command, 'ufw-docker delete allow')
+        ))->toBeTrue()
+        ->and(collect($manager->calls[0]['commands'])->contains(
+            fn (string $command) => str_contains($command, 'ufw-docker allow') && ! str_contains($command, 'delete')
+        ))->toBeTrue();
 });
 
 it('throws when an application edge port proxy write fails so the queued sync can retry', function () {
@@ -130,7 +142,7 @@ it('does not mirror loopback-bound or invalid published ports', function () {
 
     expect($manager->syncApplicationWithServers($application, $edgeProxyServer, $deploymentServer))->toBe([])
         ->and($manager->calls)->toHaveCount(1)
-        ->and($manager->calls[0][0])->toContain('docker rm -f')
+        ->and(collect($manager->calls[0])->contains(fn (string $command) => str_contains($command, 'docker rm -f')))->toBeTrue()
         ->and(implode("\n", $manager->calls[0]))->not->toContain('docker compose');
 });
 
@@ -170,7 +182,7 @@ it('mirrors application published udp ports onto the edge server for remote depl
 
     preg_match("/echo '([^']+)' \\| base64 -d \\| tee .*nginx\\.conf/", $manager->calls[0]['commands'][2], $nginxMatches);
     $nginxConf = base64_decode($nginxMatches[1] ?? '');
-    expect($nginxConf)->toContain('listen 19132 udp;')
+    expect($nginxConf)->toContain('listen 19132 udp reuseport;')
         ->and($nginxConf)->toContain('proxy_pass 10.8.0.25:19132;');
 
     preg_match("/echo '([^']+)' \\| base64 -d \\| tee .*docker-compose\\.yaml/", $manager->calls[0]['commands'][3], $composeMatches);
@@ -179,6 +191,55 @@ it('mirrors application published udp ports onto the edge server for remote depl
 
     expect(data_get($parsedCompose, 'services.application-application-udp-port-forward-edge-port-proxy.ports'))
         ->toBe(['19132:19132/udp']);
+});
+
+it('resolves a bedrock minecraft udp service port to the published edge port', function () {
+    $edgeProxyServer = Mockery::mock(Server::class)->makePartial();
+    $edgeProxyServer->id = 13;
+
+    $deploymentServer = Mockery::mock(Server::class)->makePartial();
+    $deploymentServer->id = 14;
+    $deploymentServer->ip = '10.8.0.26';
+
+    $service = new Service;
+    $service->uuid = 'minecraft-port-25542';
+    $service->docker_compose_raw = <<<'YAML'
+services:
+  bedrock:
+    image: itzg/minecraft-bedrock-server
+    ports:
+      - ${PORT}:19132/udp
+    environment:
+      - EULA=TRUE
+YAML;
+    $service->setRelation('environment_variables', collect([
+        (object) ['key' => 'PORT', 'value' => '25542'],
+    ]));
+
+    $manager = new class extends EdgeProxyRemotePortForwardService
+    {
+        public array $calls = [];
+
+        protected function runRemoteCommands(Server $server, array $commands, bool $throwError = true): ?string
+        {
+            $this->calls[] = $commands;
+
+            return null;
+        }
+    };
+
+    expect($manager->syncServiceWithServers($service, $edgeProxyServer, $deploymentServer))->toBe([])
+        ->and($manager->calls)->toHaveCount(1);
+
+    preg_match("/echo '([^']+)' \\| base64 -d \\| tee .*nginx\\.conf/", $manager->calls[0][2], $nginxMatches);
+    $nginxConf = base64_decode($nginxMatches[1] ?? '');
+    expect($nginxConf)->toContain('listen 25542 udp reuseport;')
+        ->and($nginxConf)->toContain('proxy_pass 10.8.0.26:25542;');
+
+    preg_match("/echo '([^']+)' \\| base64 -d \\| tee .*docker-compose\\.yaml/", $manager->calls[0][3], $composeMatches);
+    $dockerCompose = base64_decode($composeMatches[1] ?? '');
+    expect(data_get(Yaml::parse($dockerCompose), 'services.service-minecraft-port-25542-edge-port-proxy.ports'))
+        ->toBe(['25542:25542/udp']);
 });
 
 it('mirrors published compose ports for services onto the edge server', function () {
@@ -225,7 +286,7 @@ YAML;
     $nginxConf = base64_decode($nginxMatches[1] ?? '');
     expect($nginxConf)->toContain('listen 25565;')
         ->and($nginxConf)->toContain('proxy_pass 10.8.0.35:25565;')
-        ->and($nginxConf)->toContain('listen 19132 udp;')
+        ->and($nginxConf)->toContain('listen 19132 udp reuseport;')
         ->and($nginxConf)->toContain('proxy_pass 10.8.0.35:19132;');
 });
 
@@ -310,7 +371,7 @@ it('warns and removes stale application edge port proxy when remote host is miss
     expect($warnings)->toHaveCount(1)
         ->and($warnings[0])->toContain('remote host is missing')
         ->and($manager->calls)->toHaveCount(1)
-        ->and($manager->calls[0]['commands'][0])->toContain('docker rm -f');
+        ->and(collect($manager->calls[0]['commands'])->contains(fn (string $command) => str_contains($command, 'docker rm -f')))->toBeTrue();
 });
 
 it('deletes service edge port proxy containers when no master router is configured', function () {
@@ -500,8 +561,14 @@ it('deletes application edge port proxy containers', function () {
 
     expect($manager->calls)->toHaveCount(1)
         ->and($manager->calls[0]['server_id'])->toBe(51)
-        ->and($manager->calls[0]['commands'][0])->toContain('application-application-delete-port-proxy-edge-port-proxy')
-        ->and($manager->calls[0]['commands'][0])->toEndWith('>/dev/null 2>&1 || true');
+        ->and($manager->calls[0]['commands'])->toHaveCount(4)
+        ->and($manager->calls[0]['commands'][0])->toContain('docker rm -f')
+        ->and($manager->calls[0]['commands'][0])->toEndWith('>/dev/null 2>&1 || true')
+        ->and($manager->calls[0]['commands'][1])->toStartWith('if which ufw')
+        ->and($manager->calls[0]['commands'][2])->toContain('ufw-docker delete allow')
+        ->and($manager->calls[0]['commands'][2])->toContain('application-application-delete-port-proxy-edge-port-proxy')
+        ->and($manager->calls[0]['commands'][2])->not->toContain('|| true')
+        ->and($manager->calls[0]['commands'][3])->toBe('fi');
 });
 
 it('deletes service edge port proxy containers from all team traefik servers', function () {

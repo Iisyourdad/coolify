@@ -389,6 +389,7 @@ class EdgeProxyRemotePortForwardService
         Collection $publishedPortMappings
     ): void {
         $containerName = $this->proxyContainerName($resourceType, $resourceUuid);
+        $escapedContainerName = escapeshellarg($containerName);
         $configurationDirectory = $this->configurationDirectory($resourceType, $resourceUuid);
         $escapedConfigurationDirectory = escapeshellarg($configurationDirectory);
         $escapedNginxPath = escapeshellarg($configurationDirectory.'/nginx.conf');
@@ -408,8 +409,9 @@ class EdgeProxyRemotePortForwardService
             "mkdir -p $escapedConfigurationDirectory; trap 'rm -f $escapedTemporaryNginxPath $escapedTemporaryComposePath' EXIT",
             "echo '{$nginxConfig}' | base64 -d | tee $escapedTemporaryNginxPath > /dev/null; mv -f $escapedTemporaryNginxPath $escapedNginxPath",
             "echo '{$dockerCompose}' | base64 -d | tee $escapedTemporaryComposePath > /dev/null; mv -f $escapedTemporaryComposePath $escapedComposePath",
-            // Avoid an unconditional registry round-trip on every application deploy.
-            "docker compose --project-directory $escapedConfigurationDirectory up -d",
+            "docker compose --project-directory $escapedConfigurationDirectory up -d --force-recreate",
+            "docker exec $escapedContainerName nginx -t",
+            ...$this->reconcileFirewallRulesCommands($escapedContainerName),
             'trap - EXIT',
         ]);
     }
@@ -420,6 +422,7 @@ class EdgeProxyRemotePortForwardService
 
         $this->runRemoteCommands($edgeProxyServer, [
             "docker rm -f $escapedContainerName >/dev/null 2>&1 || true",
+            ...$this->deleteFirewallRulesCommands($escapedContainerName),
         ], $throwError);
     }
 
@@ -456,7 +459,7 @@ class EdgeProxyRemotePortForwardService
             ->map(function (array $mapping) use ($remoteHost) {
                 $listen = (string) $mapping['published'];
                 if ($mapping['protocol'] === 'udp') {
-                    $listen .= ' udp';
+                    $listen .= ' udp reuseport';
                 }
 
                 return <<<EOF
@@ -509,7 +512,7 @@ EOF;
                     'healthcheck' => [
                         'test' => [
                             'CMD-SHELL',
-                            'stat /etc/nginx/nginx.conf || exit 1',
+                            'nginx -t',
                         ],
                         'interval' => '5s',
                         'timeout' => '5s',
@@ -518,6 +521,27 @@ EOF;
                     ],
                 ],
             ],
+        ];
+    }
+
+    /** @return list<string> */
+    private function reconcileFirewallRulesCommands(string $escapedContainerName): array
+    {
+        return [
+            'if which ufw >/dev/null 2>&1 && which ufw-docker >/dev/null 2>&1 && ufw status 2>/dev/null |grep -q \'^Status: active\'; then',
+            "ufw-docker delete allow $escapedContainerName >/dev/null 2>&1 || true",
+            "ufw-docker allow $escapedContainerName",
+            'fi',
+        ];
+    }
+
+    /** @return list<string> */
+    private function deleteFirewallRulesCommands(string $escapedContainerName): array
+    {
+        return [
+            'if which ufw >/dev/null 2>&1 && which ufw-docker >/dev/null 2>&1; then',
+            "ufw-docker delete allow $escapedContainerName",
+            'fi',
         ];
     }
 

@@ -74,6 +74,34 @@ test('handles simple command without pipes or operators', function () {
     expect($result[0])->toBe('sudo apt-get update');
 });
 
+test('keeps the set shell builtin in the current shell', function () {
+    $commands = collect([
+        'set -e',
+    ]);
+
+    $result = parseCommandsByLineForSudo($commands, $this->server);
+
+    expect($result[0])->toBe('set -e');
+});
+
+test('adds sudo safely to multiline ufw docker reconciliation commands', function () {
+    $commands = collect([
+        "if which ufw >/dev/null 2>&1 && which ufw-docker >/dev/null 2>&1 && ufw status 2>/dev/null |grep -q '^Status: active'; then",
+        "ufw-docker delete allow 'service-minecraft-edge-port-proxy' >/dev/null 2>&1 || true",
+        "ufw-docker allow 'service-minecraft-edge-port-proxy'",
+        'fi',
+    ]);
+
+    $result = parseCommandsByLineForSudo($commands, $this->server);
+
+    expect($result)->toBe([
+        "if sudo which ufw >/dev/null 2>&1 && sudo which ufw-docker >/dev/null 2>&1 && sudo ufw status 2>/dev/null |grep -q '^Status: active'; then",
+        "sudo ufw-docker delete allow 'service-minecraft-edge-port-proxy' >/dev/null 2>&1 || sudo true",
+        "sudo ufw-docker allow 'service-minecraft-edge-port-proxy'",
+        'fi',
+    ])->and(implode("\n", $result))->not->toContain('sudo command');
+});
+
 test('handles command with double ampersand operator but no pipes', function () {
     $commands = collect([
         'mkdir -p /foo && chown ubuntu /foo',
