@@ -63,9 +63,25 @@ it('rejects enabling master domain routing on non-traefik servers', function () 
     ]);
 
     expect(fn () => $server->settings->update(['is_master_domain_router_enabled' => true]))
-        ->toThrow(\RuntimeException::class, "Master domain routing can only be enabled on Traefik servers. Server {$server->id} uses proxy type caddy.");
+        ->toThrow(RuntimeException::class, "Master domain routing can only be enabled on Traefik servers. Server {$server->id} uses proxy type caddy.");
 
     expect($server->settings->fresh()->is_master_domain_router_enabled)->toBeFalse();
+});
+
+it('rejects changing an enabled master domain router away from traefik', function () {
+    $user = User::factory()->create();
+    $team = $user->teams()->first();
+
+    $server = Server::factory()->create([
+        'team_id' => $team->id,
+        'proxy' => ['type' => ProxyTypes::TRAEFIK->value],
+    ]);
+    $server->settings->update(['is_master_domain_router_enabled' => true]);
+
+    expect(fn () => $server->changeProxy(ProxyTypes::CADDY->value))
+        ->toThrow(RuntimeException::class, 'A master domain router must keep using the Traefik proxy.');
+
+    expect($server->fresh()->proxyType())->toBe(ProxyTypes::TRAEFIK->value);
 });
 
 it('locks master domain router toggle when another server in the same team is already selected', function () {

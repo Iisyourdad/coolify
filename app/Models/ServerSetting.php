@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\ProxyTypes;
+use App\Jobs\ReconcileTeamEdgeProxyJob;
 use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Model;
@@ -149,6 +150,10 @@ class ServerSetting extends Model
             }
         });
         static::updated(function ($settings) {
+            if ($settings->wasChanged('is_master_domain_router_enabled')) {
+                $settings->queueTeamEdgeProxyReconciliation();
+            }
+
             if (
                 $settings->wasChanged('sentinel_token') ||
                 $settings->wasChanged('sentinel_custom_url') ||
@@ -244,6 +249,23 @@ class ServerSetting extends Model
         }
 
         Cache::forget(shouldUsePublicCertResolverCacheKey((int) $teamId));
+    }
+
+    private function queueTeamEdgeProxyReconciliation(): void
+    {
+        if (is_null($this->server_id)) {
+            return;
+        }
+
+        $teamId = $this->relationLoaded('server')
+            ? data_get($this, 'server.team_id')
+            : Server::query()->whereKey($this->server_id)->value('team_id');
+
+        if (is_null($teamId)) {
+            return;
+        }
+
+        ReconcileTeamEdgeProxyJob::dispatch((int) $teamId)->afterCommit();
     }
 
     /**

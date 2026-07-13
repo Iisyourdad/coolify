@@ -7,6 +7,7 @@ use App\Models\Server;
 use App\Models\Service;
 use App\Traits\ResolvesEdgeProxyServer;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Str;
 use Symfony\Component\Yaml\Yaml;
 
 class EdgeProxyRemotePortForwardService
@@ -53,7 +54,7 @@ class EdgeProxyRemotePortForwardService
         $teamId = $this->extractApplicationTeamId($application);
         $deploymentServer = $this->resolveApplicationDeploymentServer($application);
         if (! $deploymentServer instanceof Server) {
-            return [];
+            return $this->deleteApplication($application);
         }
 
         $edgeProxyServer = $this->resolveEdgeProxyServerByTeamId($teamId);
@@ -225,7 +226,7 @@ class EdgeProxyRemotePortForwardService
                 $exception->getMessage()
             );
             $this->logWarning($warning);
-            $warnings[] = $warning;
+            throw $exception;
         }
 
         foreach ($warnings as $warning) {
@@ -289,6 +290,9 @@ class EdgeProxyRemotePortForwardService
                 }
 
                 $published = $this->resolvePortValue(data_get($portDefinition, 'published'), $environmentMap);
+                if (! $this->publishedBindIsRemotelyReachable(data_get($portDefinition, 'host_ip'))) {
+                    $published = null;
+                }
                 if (! is_null($published)) {
                     $mappings->push([
                         'published' => $published,
@@ -330,6 +334,12 @@ class EdgeProxyRemotePortForwardService
             ];
         }
 
+        $bindHost = null;
+        if (preg_match('/^\[([^]]+)]:(.+)$/', $normalizedPortDefinition, $bindMatches)) {
+            $bindHost = $bindMatches[1];
+            $normalizedPortDefinition = $bindMatches[2];
+        }
+
         $segments = $this->splitPortDefinitionSegments($normalizedPortDefinition);
         if (count($segments) < 2) {
             return null;
@@ -337,6 +347,12 @@ class EdgeProxyRemotePortForwardService
 
         array_pop($segments);
         $publishedPort = $this->resolvePortValue(array_pop($segments), $environmentMap);
+        if (is_null($bindHost) && $segments !== []) {
+            $bindHost = implode(':', $segments);
+        }
+        if (! $this->publishedBindIsRemotelyReachable($bindHost)) {
+            $publishedPort = null;
+        }
 
         return [
             'published' => $publishedPort,
@@ -377,7 +393,8 @@ class EdgeProxyRemotePortForwardService
         $escapedConfigurationDirectory = escapeshellarg($configurationDirectory);
         $escapedNginxPath = escapeshellarg($configurationDirectory.'/nginx.conf');
         $escapedComposePath = escapeshellarg($configurationDirectory.'/docker-compose.yaml');
-        $escapedContainerName = escapeshellarg($containerName);
+        $escapedTemporaryNginxPath = escapeshellarg($configurationDirectory.'/nginx.conf.tmp-'.Str::random(12));
+        $escapedTemporaryComposePath = escapeshellarg($configurationDirectory.'/docker-compose.yaml.tmp-'.Str::random(12));
 
         $nginxConfig = base64_encode($this->generateNginxStreamConfig($remoteHost, $publishedPortMappings));
         $dockerCompose = base64_encode(Yaml::dump(
@@ -387,12 +404,13 @@ class EdgeProxyRemotePortForwardService
         ));
 
         $this->runRemoteCommands($edgeProxyServer, [
-            "docker rm -f $escapedContainerName >/dev/null 2>&1 || true",
-            "mkdir -p $escapedConfigurationDirectory",
-            "echo '{$nginxConfig}' | base64 -d | tee $escapedNginxPath > /dev/null",
-            "echo '{$dockerCompose}' | base64 -d | tee $escapedComposePath > /dev/null",
+            'set -e',
+            "mkdir -p $escapedConfigurationDirectory; trap 'rm -f $escapedTemporaryNginxPath $escapedTemporaryComposePath' EXIT",
+            "echo '{$nginxConfig}' | base64 -d | tee $escapedTemporaryNginxPath > /dev/null; mv -f $escapedTemporaryNginxPath $escapedNginxPath",
+            "echo '{$dockerCompose}' | base64 -d | tee $escapedTemporaryComposePath > /dev/null; mv -f $escapedTemporaryComposePath $escapedComposePath",
             // Avoid an unconditional registry round-trip on every application deploy.
             "docker compose --project-directory $escapedConfigurationDirectory up -d",
+            'trap - EXIT',
         ]);
     }
 
@@ -817,7 +835,7 @@ EOF;
     private function resolvePortValue(mixed $rawPortValue, array $environmentMap): ?int
     {
         if (is_int($rawPortValue)) {
-            return $rawPortValue;
+            return $this->validatedPort($rawPortValue);
         }
 
         $normalizedPortValue = trim((string) $rawPortValue);
@@ -830,7 +848,7 @@ EOF;
         }
 
         if (preg_match('/^\d+$/', $normalizedPortValue)) {
-            return (int) $normalizedPortValue;
+            return $this->validatedPort((int) $normalizedPortValue);
         }
 
         if (
@@ -845,11 +863,11 @@ EOF;
 
             $resolvedEnvironmentPort = $environmentMap[$environmentKey] ?? null;
             if (! is_null($resolvedEnvironmentPort) && is_numeric(trim((string) $resolvedEnvironmentPort))) {
-                return (int) trim((string) $resolvedEnvironmentPort);
+                return $this->validatedPort((int) trim((string) $resolvedEnvironmentPort));
             }
 
             if ($defaultPort !== '' && is_numeric($defaultPort)) {
-                return (int) $defaultPort;
+                return $this->validatedPort((int) $defaultPort);
             }
 
             return null;
@@ -859,16 +877,35 @@ EOF;
             $environmentKey = $matches[1];
             $resolvedEnvironmentPort = $environmentMap[$environmentKey] ?? null;
             if (! is_null($resolvedEnvironmentPort) && is_numeric(trim((string) $resolvedEnvironmentPort))) {
-                return (int) trim((string) $resolvedEnvironmentPort);
+                return $this->validatedPort((int) trim((string) $resolvedEnvironmentPort));
             }
 
             return null;
         }
 
         if (array_key_exists($normalizedPortValue, $environmentMap) && is_numeric(trim((string) $environmentMap[$normalizedPortValue]))) {
-            return (int) trim((string) $environmentMap[$normalizedPortValue]);
+            return $this->validatedPort((int) trim((string) $environmentMap[$normalizedPortValue]));
         }
 
         return null;
+    }
+
+    private function validatedPort(int $port): ?int
+    {
+        return $port >= 1 && $port <= 65535 ? $port : null;
+    }
+
+    private function publishedBindIsRemotelyReachable(mixed $bindHost): bool
+    {
+        $bindHost = strtolower(trim((string) $bindHost, " \t\n\r\0\x0B[]"));
+        if ($bindHost === '') {
+            return true;
+        }
+
+        if ($bindHost === 'localhost' || $bindHost === '::1') {
+            return false;
+        }
+
+        return ! str_starts_with($bindHost, '127.');
     }
 }

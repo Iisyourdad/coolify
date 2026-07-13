@@ -2,11 +2,17 @@
 
 namespace App\Models;
 
+use App\Jobs\SyncApplicationEdgeProxyJob;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Model;
 
 class ApplicationSetting extends Model
 {
+    private const EDGE_PROXY_SYNC_ATTRIBUTES = [
+        'is_force_https_enabled',
+        'exclude_from_master_domain_routing',
+    ];
+
     protected $casts = [
         'is_static' => 'boolean',
         'is_spa' => 'boolean',
@@ -69,6 +75,20 @@ class ApplicationSetting extends Model
         'docker_images_to_keep',
         'stop_grace_period',
     ];
+
+    protected static function booted(): void
+    {
+        static::updated(function (ApplicationSetting $settings): void {
+            if (! $settings->wasChanged(self::EDGE_PROXY_SYNC_ATTRIBUTES)) {
+                return;
+            }
+
+            $application = $settings->application;
+            if ($application instanceof Application) {
+                SyncApplicationEdgeProxyJob::dispatch($application)->afterCommit();
+            }
+        });
+    }
 
     public function stopGracePeriodSeconds(): int
     {

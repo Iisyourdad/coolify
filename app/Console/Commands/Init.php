@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Enums\ActivityTypes;
 use App\Enums\ApplicationDeploymentStatus;
+use App\Enums\ProxyTypes;
 use App\Jobs\CheckHelperImageJob;
 use App\Jobs\PullChangelog;
 use App\Models\Application;
@@ -221,22 +222,22 @@ class Init extends Command
      * This is what lets an already-connected server pick up master-domain routing
      * without being disconnected/reconnected or every resource being redeployed:
      * once an instance is updated, app:init reconciles the generated files on the
-     * edge proxy. Only teams that actually have a master domain router enabled are
-     * reconciled, to avoid needless SSH work for everyone else. The per-resource
-     * sync methods are idempotent and remove stale files when routing no longer
-     * applies, so re-running this on every startup is safe.
+     * edge proxy. Teams with any Traefik server are reconciled even when routing is
+     * currently disabled, because those servers can still contain files from a former
+     * master router. The per-resource sync methods are idempotent and remove stale
+     * files when routing no longer applies, so re-running this on every startup is safe.
      */
     private function rebuildRemoteProxyConfigurations(): void
     {
-        $masterRoutingTeamIds = Server::query()
-            ->whereRelation('settings', 'is_master_domain_router_enabled', true)
+        $edgeRoutingTeamIds = Server::query()
+            ->whereProxyType(ProxyTypes::TRAEFIK->value)
             ->pluck('team_id')
             ->filter()
             ->map(fn ($teamId) => (int) $teamId)
             ->unique()
             ->values();
 
-        if ($masterRoutingTeamIds->isEmpty()) {
+        if ($edgeRoutingTeamIds->isEmpty()) {
             return;
         }
 
@@ -246,10 +247,10 @@ class Init extends Command
 
         Application::query()
             ->with(['destination.server', 'environment.project', 'settings'])
-            ->chunkById(100, function (Collection $applications) use ($routeService, $portForwardService, $masterRoutingTeamIds, &$rebuiltCount) {
+            ->chunkById(100, function (Collection $applications) use ($routeService, $portForwardService, $edgeRoutingTeamIds, &$rebuiltCount) {
                 foreach ($applications as $application) {
                     $teamId = data_get($application, 'environment.project.team_id');
-                    if (is_null($teamId) || ! $masterRoutingTeamIds->contains((int) $teamId)) {
+                    if (is_null($teamId) || ! $edgeRoutingTeamIds->contains((int) $teamId)) {
                         continue;
                     }
 
@@ -265,10 +266,10 @@ class Init extends Command
 
         Service::query()
             ->with(['destination.server', 'environment.project', 'server', 'applications'])
-            ->chunkById(100, function (Collection $services) use ($routeService, $portForwardService, $masterRoutingTeamIds, &$rebuiltCount) {
+            ->chunkById(100, function (Collection $services) use ($routeService, $portForwardService, $edgeRoutingTeamIds, &$rebuiltCount) {
                 foreach ($services as $service) {
                     $teamId = data_get($service, 'environment.project.team_id');
-                    if (is_null($teamId) || ! $masterRoutingTeamIds->contains((int) $teamId)) {
+                    if (is_null($teamId) || ! $edgeRoutingTeamIds->contains((int) $teamId)) {
                         continue;
                     }
 
@@ -296,19 +297,25 @@ class Init extends Command
     private function pruneOrphanRemoteProxyConfigurations(EdgeProxyRemoteRouteService $routeService): void
     {
         $edgeProxyServers = Server::query()
-            ->whereRelation('settings', 'is_master_domain_router_enabled', true)
+            ->whereProxyType(ProxyTypes::TRAEFIK->value)
             ->get();
 
         if ($edgeProxyServers->isEmpty()) {
             return;
         }
 
-        $validApplicationUuids = Application::query()->pluck('uuid')->all();
-        $validServiceUuids = Service::query()->pluck('uuid')->all();
         $prunedCount = 0;
 
         foreach ($edgeProxyServers as $edgeProxyServer) {
             try {
+                $validApplicationUuids = Application::query()
+                    ->whereHas('environment.project', fn ($query) => $query->where('team_id', $edgeProxyServer->team_id))
+                    ->pluck('uuid')
+                    ->all();
+                $validServiceUuids = Service::query()
+                    ->whereHas('environment.project', fn ($query) => $query->where('team_id', $edgeProxyServer->team_id))
+                    ->pluck('uuid')
+                    ->all();
                 $warnings = $routeService->pruneOrphanRouteFiles($edgeProxyServer, $validApplicationUuids, $validServiceUuids);
                 $prunedCount += count($warnings);
             } catch (\Throwable $e) {

@@ -43,7 +43,27 @@ it('syncs service routes and port forwarding through the edge proxy job', functi
         ->andReturn(['port warning']);
     app()->instance(EdgeProxyRemotePortForwardService::class, $portForwardService);
 
-    (new SyncServiceEdgeProxyJob($service))->handle();
+    (new SyncServiceEdgeProxyJob($service))->handle($routeService, $portForwardService);
 
     expect(true)->toBeTrue();
+});
+
+it('rethrows service sync failures after attempting route and port reconciliation', function () {
+    $service = new Service;
+    $service->uuid = 'service-edge-sync-failure';
+
+    $routeService = Mockery::mock(EdgeProxyRemoteRouteService::class);
+    $routeService->shouldReceive('syncService')
+        ->once()
+        ->with($service)
+        ->andThrow(new RuntimeException('service route ssh failed'));
+
+    $portForwardService = Mockery::mock(EdgeProxyRemotePortForwardService::class);
+    $portForwardService->shouldReceive('syncService')
+        ->once()
+        ->with($service)
+        ->andReturn([]);
+
+    expect(fn () => (new SyncServiceEdgeProxyJob($service))->handle($routeService, $portForwardService))
+        ->toThrow(RuntimeException::class, 'service route ssh failed');
 });

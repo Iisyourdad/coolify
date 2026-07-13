@@ -151,18 +151,15 @@ class EdgeProxyRemoteRouteService
                 }
 
                 $requestedInternalPort = $url->getPort() ?? $application->getRequiredPort();
-                $publishedPort = $this->resolvePublishedPort($compose, $application->name, $requestedInternalPort, $environmentMap);
+                $publishedPort = $this->deploymentProxySupportsDomainRouting($deploymentServer)
+                    ? null
+                    : $this->resolvePublishedPort($compose, $application->name, $requestedInternalPort, $environmentMap);
 
                 $upstream = $this->resolveRouteUpstream(
                     $deploymentServer,
                     $tunnelHost,
                     $publishedPort,
-                    $this->canFallbackToDeploymentProxyForServiceApplication(
-                        $application,
-                        $requestedInternalPort,
-                        $compose,
-                        $environmentMap
-                    )
+                    $url->getScheme()
                 );
 
                 if (is_null($upstream)) {
@@ -176,16 +173,8 @@ class EdgeProxyRemoteRouteService
                     continue;
                 }
 
-                if ($this->isDeploymentProxyFallbackUpstream($upstream)) {
-                    $warnings[] = sprintf(
-                        'Edge proxy route fallback for service %s (%s, domain %s): published host port could not be resolved, so traffic will be forwarded to the deployment server HTTPS proxy instead.',
-                        $service->uuid,
-                        $application->name,
-                        $domain
-                    );
-                }
-
                 $routes[] = [
+                    'scheme' => $url->getScheme(),
                     'host' => $url->getHost(),
                     'path' => $url->getPath(),
                     ...$upstream,
@@ -215,7 +204,7 @@ class EdgeProxyRemoteRouteService
                 $exception->getMessage()
             );
             $this->logWarning($warning);
-            $warnings[] = $warning;
+            throw $exception;
         }
 
         return $warnings;
@@ -236,7 +225,7 @@ class EdgeProxyRemoteRouteService
         $deploymentServer = $this->resolveApplicationDeploymentServer($application);
 
         if (! $deploymentServer instanceof Server) {
-            return [];
+            return $this->cleanupApplicationRouteFiles($application);
         }
 
         $edgeProxyServer = $this->resolveEdgeProxyServerByTeamId($teamId);
@@ -373,25 +362,21 @@ class EdgeProxyRemoteRouteService
             }
 
             $requestedInternalPort = $url->getPort();
-            $publishedPort = $this->resolvePublishedPortForApplication(
-                $application,
-                $requestedInternalPort,
-                $composeServiceName,
-                $compose,
-                $environmentMap
-            );
-
-            $upstream = $this->resolveRouteUpstream(
-                $deploymentServer,
-                $tunnelHost,
-                $publishedPort,
-                $this->canFallbackToDeploymentProxyForApplication(
+            $publishedPort = $this->deploymentProxySupportsDomainRouting($deploymentServer)
+                ? null
+                : $this->resolvePublishedPortForApplication(
                     $application,
                     $requestedInternalPort,
                     $composeServiceName,
                     $compose,
                     $environmentMap
-                )
+                );
+
+            $upstream = $this->resolveRouteUpstream(
+                $deploymentServer,
+                $tunnelHost,
+                $publishedPort,
+                $url->getScheme()
             );
 
             if (is_null($upstream)) {
@@ -404,15 +389,9 @@ class EdgeProxyRemoteRouteService
                 continue;
             }
 
-            if ($this->isDeploymentProxyFallbackUpstream($upstream)) {
-                $warnings[] = sprintf(
-                    'Edge proxy route fallback for application %s (domain %s): published host port could not be resolved, so traffic will be forwarded to the deployment server HTTPS proxy instead.',
-                    $application->uuid,
-                    $domain
-                );
-            }
-
             $routes[] = [
+                'scheme' => $url->getScheme(),
+                'force_https' => $this->applicationForcesHttps($application),
                 'host' => $url->getHost(),
                 'path' => $url->getPath(),
                 ...$upstream,
@@ -441,7 +420,7 @@ class EdgeProxyRemoteRouteService
                 $exception->getMessage()
             );
             $this->logWarning($warning);
-            $warnings[] = $warning;
+            throw $exception;
         }
 
         return $warnings;
@@ -546,7 +525,7 @@ class EdgeProxyRemoteRouteService
         try {
             $listing = $this->runRemoteCommands($edgeProxyServer, [
                 "ls -1 $escapedDirectory 2>/dev/null || true",
-            ], false);
+            ]);
         } catch (\Throwable $exception) {
             return [sprintf(
                 'Failed to list edge proxy dynamic directory on server %s (%d): %s',
@@ -573,14 +552,22 @@ class EdgeProxyRemoteRouteService
             if (str_starts_with($fileName, self::APPLICATION_ROUTE_FILE_PREFIX)) {
                 $uuid = Str::of($fileName)->after(self::APPLICATION_ROUTE_FILE_PREFIX)->beforeLast('.yaml')->value();
                 if ($uuid !== '' && ! isset($validApplicationUuids[$uuid])) {
-                    $this->deleteRouteFile($edgeProxyServer, $uuid, self::APPLICATION_ROUTE_FILE_PREFIX, false);
-                    $warnings[] = sprintf('Removed orphan edge route file %s on server %d (application no longer exists).', $fileName, $edgeProxyServer->id);
+                    try {
+                        $this->deleteRouteFile($edgeProxyServer, $uuid, self::APPLICATION_ROUTE_FILE_PREFIX);
+                        $warnings[] = sprintf('Removed orphan edge route file %s on server %d (application no longer exists).', $fileName, $edgeProxyServer->id);
+                    } catch (\Throwable $exception) {
+                        $warnings[] = sprintf('Failed to remove orphan edge route file %s on server %d: %s', $fileName, $edgeProxyServer->id, $exception->getMessage());
+                    }
                 }
             } elseif (str_starts_with($fileName, self::SERVICE_ROUTE_FILE_PREFIX)) {
                 $uuid = Str::of($fileName)->after(self::SERVICE_ROUTE_FILE_PREFIX)->beforeLast('.yaml')->value();
                 if ($uuid !== '' && ! isset($validServiceUuids[$uuid])) {
-                    $this->deleteRouteFile($edgeProxyServer, $uuid, self::SERVICE_ROUTE_FILE_PREFIX, false);
-                    $warnings[] = sprintf('Removed orphan edge route file %s on server %d (service no longer exists).', $fileName, $edgeProxyServer->id);
+                    try {
+                        $this->deleteRouteFile($edgeProxyServer, $uuid, self::SERVICE_ROUTE_FILE_PREFIX);
+                        $warnings[] = sprintf('Removed orphan edge route file %s on server %d (service no longer exists).', $fileName, $edgeProxyServer->id);
+                    } catch (\Throwable $exception) {
+                        $warnings[] = sprintf('Failed to remove orphan edge route file %s on server %d: %s', $fileName, $edgeProxyServer->id, $exception->getMessage());
+                    }
                 }
             }
         }
@@ -603,13 +590,6 @@ class EdgeProxyRemoteRouteService
 
         $config = [
             'http' => [
-                'middlewares' => [
-                    $redirectMiddlewareName => [
-                        'redirectScheme' => [
-                            'scheme' => 'https',
-                        ],
-                    ],
-                ],
                 'routers' => [],
                 'services' => [],
             ],
@@ -626,21 +606,38 @@ class EdgeProxyRemoteRouteService
                 continue;
             }
 
-            $config['http']['routers'][$httpRouterName] = [
+            $scheme = strtolower((string) data_get($route, 'scheme', 'https'));
+            $forceHttps = data_get($route, 'force_https', true) !== false;
+            $httpRouter = [
                 'rule' => $rule,
                 'entryPoints' => [$this->httpEntryPointName()],
-                'middlewares' => [$redirectMiddlewareName],
                 'service' => $serviceName,
             ];
 
-            $config['http']['routers'][$httpsRouterName] = [
-                'rule' => $rule,
-                'entryPoints' => [$this->httpsEntryPointName()],
-                'service' => $serviceName,
-                'tls' => [
-                    'certResolver' => $this->certResolverName(),
-                ],
-            ];
+            if ($scheme === 'https') {
+                if ($forceHttps) {
+                    $config['http']['middlewares'][$redirectMiddlewareName] = [
+                        'redirectScheme' => [
+                            'scheme' => 'https',
+                        ],
+                    ];
+                    $httpRouter['middlewares'] = [$redirectMiddlewareName];
+                }
+
+                $tls = [];
+                if (filter_var($route['host'], FILTER_VALIDATE_IP) === false) {
+                    $tls['certResolver'] = $this->certResolverName();
+                }
+
+                $config['http']['routers'][$httpsRouterName] = [
+                    'rule' => $rule,
+                    'entryPoints' => [$this->httpsEntryPointName()],
+                    'service' => $serviceName,
+                    'tls' => $tls,
+                ];
+            }
+
+            $config['http']['routers'][$httpRouterName] = $httpRouter;
 
             $config['http']['services'][$serviceName] = [
                 'loadBalancer' => [
@@ -703,7 +700,7 @@ class EdgeProxyRemoteRouteService
         $payload = base64_encode($banner.$yaml);
 
         $routeFilePath = $this->resourceRouteFilePath($edgeProxyServer, $filePrefix, $resourceUuid);
-        $temporaryRouteFilePath = $routeFilePath.'.tmp';
+        $temporaryRouteFilePath = $routeFilePath.'.tmp-'.Str::random(12);
 
         $escapedDirectory = escapeshellarg($this->routeDirectoryPath($edgeProxyServer));
         $escapedFilePath = escapeshellarg($routeFilePath);
@@ -711,8 +708,7 @@ class EdgeProxyRemoteRouteService
 
         $this->runRemoteCommands($edgeProxyServer, [
             "mkdir -p $escapedDirectory",
-            "echo '$payload' | base64 -d | tee $escapedTemporaryFilePath > /dev/null",
-            "mv $escapedTemporaryFilePath $escapedFilePath",
+            "set -e; trap 'rm -f $escapedTemporaryFilePath' EXIT; echo '$payload' | base64 -d | tee $escapedTemporaryFilePath > /dev/null; mv -f $escapedTemporaryFilePath $escapedFilePath; trap - EXIT",
         ]);
     }
 
@@ -720,10 +716,10 @@ class EdgeProxyRemoteRouteService
     {
         $routeFilePath = $this->resourceRouteFilePath($edgeProxyServer, $filePrefix, $resourceUuid);
         $escapedFilePath = escapeshellarg($routeFilePath);
-        $escapedTemporaryFilePath = escapeshellarg($routeFilePath.'.tmp');
+        $escapedTemporaryFilePathPattern = escapeshellarg($routeFilePath).'.tmp-*';
 
         $this->runRemoteCommands($edgeProxyServer, [
-            "rm -f $escapedFilePath $escapedTemporaryFilePath",
+            "rm -f $escapedFilePath $escapedTemporaryFilePathPattern",
         ], $throwError);
     }
 
@@ -867,6 +863,19 @@ class EdgeProxyRemoteRouteService
         }
 
         return (bool) data_get($application->getRelation('settings'), 'exclude_from_master_domain_routing', false);
+    }
+
+    private function applicationForcesHttps(Application $application): bool
+    {
+        if ($application->relationLoaded('settings')) {
+            return data_get($application->getRelation('settings'), 'is_force_https_enabled') !== false;
+        }
+
+        if (! $application->exists) {
+            return true;
+        }
+
+        return $application->settings?->is_force_https_enabled !== false;
     }
 
     private function getApplicationDomains(Application $application): Collection
@@ -1024,97 +1033,31 @@ class EdgeProxyRemoteRouteService
         Server $deploymentServer,
         string $tunnelHost,
         ?int $publishedPort,
-        bool $allowDeploymentProxyFallback
+        string $domainScheme
     ): ?array {
+        $domainScheme = strtolower($domainScheme) === 'http' ? 'http' : 'https';
+        if ($this->deploymentProxySupportsDomainRouting($deploymentServer)) {
+            $isHttps = $domainScheme === 'https';
+
+            return array_filter([
+                'upstream_url' => sprintf('%s://%s:%d', $domainScheme, $tunnelHost, $isHttps ? 443 : 80),
+                'pass_host_header' => true,
+                'use_insecure_transport' => $isHttps,
+            ], fn (mixed $value) => $value !== false);
+        }
+
         if (! is_null($publishedPort)) {
             return [
                 'upstream_url' => sprintf('http://%s:%d', $tunnelHost, $publishedPort),
             ];
         }
 
-        if (! $allowDeploymentProxyFallback) {
-            return null;
-        }
-
-        if ($deploymentServer->proxyType() === ProxyTypes::NONE->value) {
-            return null;
-        }
-
-        return [
-            'upstream_url' => sprintf('https://%s:443', $tunnelHost),
-            'pass_host_header' => true,
-            'use_insecure_transport' => true,
-        ];
+        return null;
     }
 
-    private function isDeploymentProxyFallbackUpstream(array $upstream): bool
+    private function deploymentProxySupportsDomainRouting(Server $deploymentServer): bool
     {
-        return data_get($upstream, 'use_insecure_transport') === true;
-    }
-
-    private function canFallbackToDeploymentProxyForServiceApplication(
-        ServiceApplication $application,
-        ?int $requestedInternalPort,
-        array $compose,
-        array $environmentMap
-    ): bool {
-        $candidatePorts = $this->resolveComposeServiceInternalPorts($compose, $application->name, $environmentMap);
-        $requiredPort = $application->getRequiredPort();
-        if (! is_null($requiredPort)) {
-            $candidatePorts->push($requiredPort);
-        }
-
-        return $this->candidatePortsSupportProxyFallback($requestedInternalPort, $candidatePorts);
-    }
-
-    private function canFallbackToDeploymentProxyForApplication(
-        Application $application,
-        ?int $requestedInternalPort,
-        ?string $composeServiceName,
-        array $compose,
-        array $environmentMap
-    ): bool {
-        if ($application->build_pack === 'dockercompose') {
-            $serviceName = blank($composeServiceName) ? $application->uuid : $composeServiceName;
-
-            return $this->candidatePortsSupportProxyFallback(
-                $requestedInternalPort,
-                $this->resolveComposeServiceInternalPorts($compose, $serviceName, $environmentMap)
-            );
-        }
-
-        return $this->candidatePortsSupportProxyFallback(
-            $requestedInternalPort,
-            $this->applicationInternalPorts($application)
-        );
-    }
-
-    private function candidatePortsSupportProxyFallback(?int $requestedInternalPort, Collection $candidatePorts): bool
-    {
-        $candidatePorts = $candidatePorts
-            ->filter(fn (mixed $port) => is_int($port) || (is_string($port) && is_numeric($port)))
-            ->map(fn (mixed $port) => (int) $port)
-            ->unique()
-            ->values();
-
-        if ($candidatePorts->isEmpty()) {
-            return false;
-        }
-
-        if (! is_null($requestedInternalPort)) {
-            return $candidatePorts->contains($requestedInternalPort);
-        }
-
-        return $candidatePorts->count() === 1;
-    }
-
-    private function applicationInternalPorts(Application $application): Collection
-    {
-        if ($application->relationLoaded('settings') && data_get($application, 'settings.is_static', false)) {
-            return collect([80]);
-        }
-
-        return collect($application->ports_exposes_array ?? []);
+        return in_array($deploymentServer->proxyType(), [ProxyTypes::TRAEFIK->value, ProxyTypes::CADDY->value], true);
     }
 
     private function detectUnsupportedDomainProtocol(string $domain): ?string
@@ -1258,26 +1201,6 @@ class EdgeProxyRemoteRouteService
         return $this->selectPublishedPortFromMappings($portMappings, $requestedInternalPort);
     }
 
-    private function resolveComposeServiceInternalPorts(array $compose, string $serviceName, array $environmentMap): Collection
-    {
-        $serviceConfig = $this->resolveComposeServiceConfig($compose, $serviceName);
-        if (! is_array($serviceConfig)) {
-            return collect();
-        }
-
-        $resolvedEnvironmentMap = $this->mergeComposeEnvironmentMap($serviceConfig, $environmentMap);
-
-        $ports = $this->parsePortMappings((array) data_get($serviceConfig, 'ports', []), $resolvedEnvironmentMap)
-            ->pluck('target')
-            ->filter(fn (mixed $port) => ! is_null($port));
-
-        $exposedPorts = collect((array) data_get($serviceConfig, 'expose', []))
-            ->map(fn (mixed $port) => $this->resolvePortValue($port, $resolvedEnvironmentMap))
-            ->filter(fn (?int $port) => ! is_null($port));
-
-        return $ports->merge($exposedPorts)->values();
-    }
-
     private function mergeComposeEnvironmentMap(array $serviceConfig, array $environmentMap): array
     {
         $resolvedEnvironmentMap = $environmentMap;
@@ -1403,6 +1326,8 @@ class EdgeProxyRemoteRouteService
             if ($matchingPublished) {
                 return $matchingPublished['published'];
             }
+
+            return null;
         }
 
         if (! is_null($fallbackInternalPort)) {
@@ -1410,6 +1335,8 @@ class EdgeProxyRemoteRouteService
             if ($matchingTarget) {
                 return $matchingTarget['published'];
             }
+
+            return null;
         }
 
         if ($portMappings->count() === 1) {
@@ -1477,6 +1404,9 @@ class EdgeProxyRemoteRouteService
 
                 $target = $this->resolvePortValue(data_get($portDefinition, 'target'), $environmentMap);
                 $published = $this->resolvePortValue(data_get($portDefinition, 'published'), $environmentMap);
+                if (! $this->publishedBindIsRemotelyReachable(data_get($portDefinition, 'host_ip'))) {
+                    $published = null;
+                }
 
                 if (! is_null($target) || ! is_null($published)) {
                     $mappings->push([
@@ -1515,6 +1445,12 @@ class EdgeProxyRemoteRouteService
         }
 
         if (str_contains($normalizedPortDefinition, ':')) {
+            $bindHost = null;
+            if (preg_match('/^\[([^]]+)]:(.+)$/', $normalizedPortDefinition, $bindMatches)) {
+                $bindHost = $bindMatches[1];
+                $normalizedPortDefinition = $bindMatches[2];
+            }
+
             $segments = $this->splitPortDefinitionSegments($normalizedPortDefinition);
             if (count($segments) < 2) {
                 return null;
@@ -1522,6 +1458,12 @@ class EdgeProxyRemoteRouteService
 
             $containerPort = $this->resolvePortValue(array_pop($segments), $environmentMap);
             $hostPort = $this->resolvePortValue(array_pop($segments), $environmentMap);
+            if (is_null($bindHost) && $segments !== []) {
+                $bindHost = implode(':', $segments);
+            }
+            if (! $this->publishedBindIsRemotelyReachable($bindHost)) {
+                $hostPort = null;
+            }
 
             return [
                 'target' => $containerPort,
@@ -1569,7 +1511,7 @@ class EdgeProxyRemoteRouteService
     private function resolvePortValue(mixed $rawPortValue, array $environmentMap): ?int
     {
         if (is_int($rawPortValue)) {
-            return $rawPortValue;
+            return $this->validatedPort($rawPortValue);
         }
 
         $normalizedPortValue = trim((string) $rawPortValue);
@@ -1583,7 +1525,7 @@ class EdgeProxyRemoteRouteService
         }
 
         if (preg_match('/^\d+$/', $normalizedPortValue)) {
-            return (int) $normalizedPortValue;
+            return $this->validatedPort((int) $normalizedPortValue);
         }
 
         if (
@@ -1598,11 +1540,11 @@ class EdgeProxyRemoteRouteService
 
             $resolvedEnvironmentPort = $environmentMap[$environmentKey] ?? null;
             if (! is_null($resolvedEnvironmentPort) && is_numeric(trim((string) $resolvedEnvironmentPort))) {
-                return (int) trim((string) $resolvedEnvironmentPort);
+                return $this->validatedPort((int) trim((string) $resolvedEnvironmentPort));
             }
 
             if ($defaultPort !== '' && is_numeric($defaultPort)) {
-                return (int) $defaultPort;
+                return $this->validatedPort((int) $defaultPort);
             }
 
             return null;
@@ -1612,17 +1554,36 @@ class EdgeProxyRemoteRouteService
             $environmentKey = $matches[1];
             $resolvedEnvironmentPort = $environmentMap[$environmentKey] ?? null;
             if (! is_null($resolvedEnvironmentPort) && is_numeric(trim((string) $resolvedEnvironmentPort))) {
-                return (int) trim((string) $resolvedEnvironmentPort);
+                return $this->validatedPort((int) trim((string) $resolvedEnvironmentPort));
             }
 
             return null;
         }
 
         if (array_key_exists($normalizedPortValue, $environmentMap) && is_numeric(trim((string) $environmentMap[$normalizedPortValue]))) {
-            return (int) trim((string) $environmentMap[$normalizedPortValue]);
+            return $this->validatedPort((int) trim((string) $environmentMap[$normalizedPortValue]));
         }
 
         return null;
+    }
+
+    private function validatedPort(int $port): ?int
+    {
+        return $port >= 1 && $port <= 65535 ? $port : null;
+    }
+
+    private function publishedBindIsRemotelyReachable(mixed $bindHost): bool
+    {
+        $bindHost = strtolower(trim((string) $bindHost, " \t\n\r\0\x0B[]"));
+        if ($bindHost === '') {
+            return true;
+        }
+
+        if ($bindHost === 'localhost' || $bindHost === '::1') {
+            return false;
+        }
+
+        return ! str_starts_with($bindHost, '127.');
     }
 
     private function logWarning(string $message): void

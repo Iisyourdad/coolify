@@ -78,6 +78,62 @@ it('mirrors application published tcp ports onto the edge server for remote depl
         ))->toBeFalse();
 });
 
+it('throws when an application edge port proxy write fails so the queued sync can retry', function () {
+    $edgeProxyServer = Mockery::mock(Server::class)->makePartial();
+    $edgeProxyServer->id = 3;
+
+    $deploymentServer = Mockery::mock(Server::class)->makePartial();
+    $deploymentServer->id = 4;
+    $deploymentServer->ip = '10.8.0.16';
+
+    $application = new Application;
+    $application->uuid = 'application-port-forward-write-failure';
+    $application->build_pack = 'nixpacks';
+    $application->ports_mappings = '25565:25565';
+
+    $manager = new class extends EdgeProxyRemotePortForwardService
+    {
+        protected function runRemoteCommands(Server $server, array $commands, bool $throwError = true): ?string
+        {
+            throw new RuntimeException('edge port proxy ssh unavailable');
+        }
+    };
+
+    expect(fn () => $manager->syncApplicationWithServers($application, $edgeProxyServer, $deploymentServer))
+        ->toThrow(RuntimeException::class, 'edge port proxy ssh unavailable');
+});
+
+it('does not mirror loopback-bound or invalid published ports', function () {
+    $edgeProxyServer = Mockery::mock(Server::class)->makePartial();
+    $edgeProxyServer->id = 5;
+
+    $deploymentServer = Mockery::mock(Server::class)->makePartial();
+    $deploymentServer->id = 6;
+    $deploymentServer->ip = '10.8.0.17';
+
+    $application = new Application;
+    $application->uuid = 'application-unreachable-published-ports';
+    $application->build_pack = 'nixpacks';
+    $application->ports_mappings = '127.0.0.1:25565:25565,70000:70000,0:0';
+
+    $manager = new class extends EdgeProxyRemotePortForwardService
+    {
+        public array $calls = [];
+
+        protected function runRemoteCommands(Server $server, array $commands, bool $throwError = true): ?string
+        {
+            $this->calls[] = $commands;
+
+            return null;
+        }
+    };
+
+    expect($manager->syncApplicationWithServers($application, $edgeProxyServer, $deploymentServer))->toBe([])
+        ->and($manager->calls)->toHaveCount(1)
+        ->and($manager->calls[0][0])->toContain('docker rm -f')
+        ->and(implode("\n", $manager->calls[0]))->not->toContain('docker compose');
+});
+
 it('mirrors application published udp ports onto the edge server for remote deployments', function () {
     $edgeProxyServer = Mockery::mock(Server::class)->makePartial();
     $edgeProxyServer->id = 11;
@@ -369,7 +425,7 @@ it('cleans up stale application edge port proxy containers on former edge server
         ->and($manager->calls[0]['server_id'])->toBe(43)
         ->and($manager->calls[1]['server_id'])->toBe(44)
         ->and(collect($manager->calls[0]['commands'])->contains(
-            fn (string $command) => str_contains($command, 'application-application-switching-master-edge-port-proxy')
+            fn (string $command) => str_contains($command, '/application-switching-master/edge-port-proxy')
         ))->toBeTrue()
         ->and($manager->calls[1]['commands'][0])->toContain('application-application-switching-master-edge-port-proxy');
 });

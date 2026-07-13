@@ -1,6 +1,7 @@
 <?php
 
 use App\Enums\ApplicationDeploymentStatus;
+use App\Enums\ProxyTypes;
 use App\Jobs\ApplicationDeploymentJob;
 use App\Models\Application;
 use App\Models\ApplicationDeploymentQueue;
@@ -359,12 +360,13 @@ test('cleanup does not send notifications', function () {
     Notification::assertNothingSent();
 });
 
-test('app:init rebuilds master domain routing for resources whose team has a master domain router', function () {
+test('app:init rebuilds or cleans master domain routing for teams with traefik servers', function () {
     // Team A has a master domain router enabled -> its resources must be reconciled on startup.
     $teamA = Team::factory()->create();
     $edgeServer = Server::factory()->create([
         'team_id' => $teamA->id,
         'ip' => '10.10.0.1',
+        'proxy' => ['type' => ProxyTypes::TRAEFIK->value],
     ]);
     // Enable the master domain router on the column directly to bypass the
     // Traefik/single-router save hooks; the startup rebuild only keys off this flag.
@@ -392,11 +394,12 @@ test('app:init rebuilds master domain routing for resources whose team has a mas
         'destination_type' => StandaloneDocker::class,
     ]);
 
-    // Team B has no master domain router -> its resources must be left untouched.
+    // Team B has no master domain router -> its resources must be reconciled for stale cleanup.
     $teamB = Team::factory()->create();
     $serverB = Server::factory()->create([
         'team_id' => $teamB->id,
         'ip' => '10.20.0.1',
+        'proxy' => ['type' => ProxyTypes::TRAEFIK->value],
     ]);
     $destinationB = StandaloneDocker::where('server_id', $serverB->id)->firstOrFail();
     $projectB = Project::factory()->create(['team_id' => $teamB->id]);
@@ -425,7 +428,11 @@ test('app:init rebuilds master domain routing for resources whose team has a mas
         ->andReturn([]);
     $routeService->shouldReceive('syncApplication')
         ->with(Mockery::on(fn ($application) => $application->id === $nonMasterApp->id))
-        ->never();
+        ->once()
+        ->andReturn([]);
+    $routeService->shouldReceive('pruneOrphanRouteFiles')
+        ->zeroOrMoreTimes()
+        ->andReturn([]);
     app()->instance(EdgeProxyRemoteRouteService::class, $routeService);
 
     $portForwardService = Mockery::mock(EdgeProxyRemotePortForwardService::class);
@@ -439,12 +446,13 @@ test('app:init rebuilds master domain routing for resources whose team has a mas
         ->andReturn([]);
     $portForwardService->shouldReceive('syncApplication')
         ->with(Mockery::on(fn ($application) => $application->id === $nonMasterApp->id))
-        ->never();
+        ->once()
+        ->andReturn([]);
     app()->instance(EdgeProxyRemotePortForwardService::class, $portForwardService);
 
     Artisan::call('app:init');
 
     // Mockery expectations are verified on teardown; reaching here means the
-    // master-routed resources were reconciled and the non-master app was skipped.
+    // resources were reconciled for both active routing and stale cleanup.
     expect(true)->toBeTrue();
 });

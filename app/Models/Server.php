@@ -10,9 +10,10 @@ use App\Actions\Server\ValidatePrerequisites;
 use App\Enums\ProxyTypes;
 use App\Events\ServerReachabilityChanged;
 use App\Helpers\SslHelper;
-use App\Jobs\ConfirmServerUnreachableJob;
 use App\Jobs\CheckAndStartSentinelJob;
 use App\Jobs\CheckTraefikVersionForServerJob;
+use App\Jobs\ConfirmServerUnreachableJob;
+use App\Jobs\ReconcileTeamEdgeProxyJob;
 use App\Jobs\RegenerateSslCertJob;
 use App\Livewire\Server\Proxy;
 use App\Notifications\Server\Reachable;
@@ -149,6 +150,18 @@ class Server extends BaseModel
                 }
             }
             $server->fill($payload);
+
+            if (
+                $server->exists &&
+                $server->isDirty('proxy') &&
+                $server->proxyType() !== ProxyTypes::TRAEFIK->value &&
+                ServerSetting::query()
+                    ->where('server_id', $server->id)
+                    ->where('is_master_domain_router_enabled', true)
+                    ->exists()
+            ) {
+                throw new \RuntimeException('A master domain router must keep using the Traefik proxy. Disable master domain routing before changing proxy type.');
+            }
         });
         static::saved(function ($server) {
             if ($server->wasChanged('private_key_id') || $server->privateKey?->isDirty()) {
@@ -219,8 +232,12 @@ class Server extends BaseModel
             $server->sslCertificates()->delete();
         });
 
-        static::updated(function () {
+        static::updated(function (Server $server) {
             static::flushIdentityMap();
+
+            if ($server->wasChanged(['ip', 'proxy']) && ! is_null($server->team_id)) {
+                ReconcileTeamEdgeProxyJob::dispatch((int) $server->team_id)->afterCommit();
+            }
         });
     }
 

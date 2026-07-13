@@ -45,6 +45,54 @@ it('generates edge traefik config for a remote domain route', function () {
         ->and(data_get($config, 'http.services.edge-service-uuid-svc-1.loadBalancer.servers.0.url'))->toBe('http://10.8.0.15:9010');
 });
 
+it('keeps http-only remote domain routes on the http entrypoint', function () {
+    $service = new EdgeProxyRemoteRouteService;
+
+    $config = $service->generateTraefikConfig('http-application-uuid', [[
+        'scheme' => 'http',
+        'host' => 'plain.example.com',
+        'path' => '/',
+        'upstream_url' => 'http://10.8.0.15:80',
+    ]]);
+
+    expect(data_get($config, 'http.routers.edge-http-application-uuid-http-1.rule'))->toBe('Host(`plain.example.com`)')
+        ->and(data_get($config, 'http.routers.edge-http-application-uuid-http-1.entryPoints'))->toBe(['http'])
+        ->and(data_get($config, 'http.routers.edge-http-application-uuid-http-1.middlewares'))->toBeNull()
+        ->and(data_get($config, 'http.routers.edge-http-application-uuid-https-1'))->toBeNull()
+        ->and(data_get($config, 'http.middlewares.edge-http-application-uuid-redirect-to-https'))->toBeNull();
+});
+
+it('does not request an acme certificate for an https route whose host is an ip address', function () {
+    $service = new EdgeProxyRemoteRouteService;
+
+    $config = $service->generateTraefikConfig('ip-application-uuid', [[
+        'scheme' => 'https',
+        'host' => '192.0.2.10',
+        'path' => '/',
+        'upstream_url' => 'http://10.8.0.15:3000',
+    ]]);
+
+    expect(data_get($config, 'http.routers.edge-ip-application-uuid-https-1.tls'))->toBe([])
+        ->and(data_get($config, 'http.routers.edge-ip-application-uuid-https-1.tls.certResolver'))->toBeNull();
+});
+
+it('serves both entrypoints without redirect when force https is disabled', function () {
+    $service = new EdgeProxyRemoteRouteService;
+
+    $config = $service->generateTraefikConfig('optional-https-uuid', [[
+        'scheme' => 'https',
+        'force_https' => false,
+        'host' => 'optional.example.com',
+        'path' => '/',
+        'upstream_url' => 'https://10.8.0.15:443',
+    ]]);
+
+    expect(data_get($config, 'http.routers.edge-optional-https-uuid-http-1.entryPoints'))->toBe(['http'])
+        ->and(data_get($config, 'http.routers.edge-optional-https-uuid-http-1.middlewares'))->toBeNull()
+        ->and(data_get($config, 'http.routers.edge-optional-https-uuid-https-1.entryPoints'))->toBe(['https'])
+        ->and(data_get($config, 'http.middlewares.edge-optional-https-uuid-redirect-to-https'))->toBeNull();
+});
+
 it('uses configured traefik entrypoints and cert resolver for remote routes', function () {
     $container = Container::getInstance();
     $hadOriginalConfig = $container->bound('config');
@@ -492,7 +540,7 @@ YAML;
         ->and($manager->calls)->toHaveCount(1);
 
     $expectedPath = '/tmp/proxy/dynamic/service-remote-service-test-uuid.yaml';
-    $expectedTempPath = '/tmp/proxy/dynamic/service-remote-service-test-uuid.yaml.tmp';
+    $expectedTempPath = '/tmp/proxy/dynamic/service-remote-service-test-uuid.yaml.tmp-';
     $firstWriteCommands = implode("\n", $manager->calls[0]['commands']);
 
     expect($firstWriteCommands)->toContain($expectedPath)
@@ -530,7 +578,7 @@ YAML;
 
     expect($manager->calls)->toHaveCount(3);
     $deleteCommands = implode("\n", $manager->calls[2]['commands']);
-    expect($deleteCommands)->toContain("rm -f '$expectedPath' '$expectedTempPath'");
+    expect($deleteCommands)->toContain("rm -f '$expectedPath' '$expectedPath'.tmp-*");
 });
 
 it('omits excluded service applications from service edge route files', function () {
@@ -637,7 +685,7 @@ it('creates, updates, and deletes a stable edge route file per application uuid'
         ->and($manager->calls)->toHaveCount(1);
 
     $expectedPath = '/tmp/proxy/dynamic/application-remote-application-test-uuid.yaml';
-    $expectedTempPath = '/tmp/proxy/dynamic/application-remote-application-test-uuid.yaml.tmp';
+    $expectedTempPath = '/tmp/proxy/dynamic/application-remote-application-test-uuid.yaml.tmp-';
     $firstWriteCommands = implode("\n", $manager->calls[0]['commands']);
 
     expect($firstWriteCommands)->toContain($expectedPath)
@@ -664,7 +712,7 @@ it('creates, updates, and deletes a stable edge route file per application uuid'
 
     expect($manager->calls)->toHaveCount(3);
     $deleteCommands = implode("\n", $manager->calls[2]['commands']);
-    expect($deleteCommands)->toContain("rm -f '$expectedPath' '$expectedTempPath'");
+    expect($deleteCommands)->toContain("rm -f '$expectedPath' '$expectedPath'.tmp-*");
 });
 
 it('creates edge route for docker compose application domains using compose service ports', function () {
@@ -758,7 +806,43 @@ it('returns actionable warning and does not write route file when application pu
         ->and(implode("\n", $manager->calls[0]['commands']))->not->toContain('tee');
 });
 
-it('keeps application edge route files for HSTS-sensitive domains by falling back to the deployment proxy https entrypoint', function () {
+it('does not route directly to a loopback-bound application port', function () {
+    $manager = new class extends EdgeProxyRemoteRouteService
+    {
+        public array $calls = [];
+
+        protected function runRemoteCommands(Server $server, array $commands, bool $throwError = true): ?string
+        {
+            $this->calls[] = $commands;
+
+            return null;
+        }
+    };
+
+    $edgeProxyServer = Mockery::mock(Server::class)->makePartial();
+    $edgeProxyServer->id = 0;
+    $edgeProxyServer->shouldReceive('proxyType')->andReturn('TRAEFIK');
+    $edgeProxyServer->shouldReceive('proxyPath')->andReturn('/tmp/proxy');
+
+    $deploymentServer = Mockery::mock(Server::class)->makePartial();
+    $deploymentServer->id = 32;
+    $deploymentServer->ip = '10.8.0.32';
+    $deploymentServer->proxy = ['type' => 'NONE'];
+
+    $application = new Application;
+    $application->uuid = 'application-loopback-port';
+    $application->build_pack = 'nixpacks';
+    $application->fqdn = 'https://loopback.example.com:3000';
+    $application->ports_mappings = '127.0.0.1:9010:3000';
+
+    $warnings = $manager->syncApplicationWithServers($application, $edgeProxyServer, $deploymentServer);
+
+    expect($warnings[0])->toContain('published host port could not be resolved')
+        ->and(implode("\n", $manager->calls[0]))->not->toContain('tee')
+        ->and(implode("\n", $manager->calls[0]))->toContain('rm -f');
+});
+
+it('routes HSTS-sensitive application domains through the deployment proxy https entrypoint', function () {
     $manager = new class extends EdgeProxyRemoteRouteService
     {
         public array $calls = [];
@@ -793,8 +877,7 @@ it('keeps application edge route files for HSTS-sensitive domains by falling bac
 
     $warnings = $manager->syncApplicationWithServers($application, $edgeProxyServer, $deploymentServer);
 
-    expect($warnings)->not->toBeEmpty()
-        ->and(collect($warnings)->contains(fn (string $warning) => str_contains($warning, 'deployment server HTTPS proxy instead')))
+    expect($warnings)->toBe([])
         ->and($manager->calls)->toHaveCount(1);
 
     preg_match("/echo '([^']+)' \\| base64 -d/", $manager->calls[0]['commands'][1], $payloadMatches);
@@ -807,7 +890,102 @@ it('keeps application edge route files for HSTS-sensitive domains by falling bac
         ->and($payload)->toContain('certResolver: letsencrypt');
 });
 
-it('does not fall back through the deployment proxy when an application domain targets an unknown internal port', function () {
+it('routes through the deployment proxy even when a host port is published', function () {
+    $manager = new class extends EdgeProxyRemoteRouteService
+    {
+        public array $calls = [];
+
+        protected function runRemoteCommands(Server $server, array $commands, bool $throwError = true): ?string
+        {
+            $this->calls[] = ['commands' => $commands, 'throw_error' => $throwError];
+
+            return null;
+        }
+    };
+
+    $edgeProxyServer = Mockery::mock(Server::class)->makePartial();
+    $edgeProxyServer->id = 0;
+    $edgeProxyServer->shouldReceive('proxyType')->andReturn('TRAEFIK');
+    $edgeProxyServer->shouldReceive('proxyPath')->andReturn('/tmp/proxy');
+
+    $deploymentServer = Mockery::mock(Server::class)->makePartial();
+    $deploymentServer->id = 32;
+    $deploymentServer->ip = '10.8.0.32';
+    $deploymentServer->proxy = ['type' => 'TRAEFIK'];
+
+    $application = new Application;
+    $application->uuid = 'application-proxy-preserves-middleware';
+    $application->build_pack = 'nixpacks';
+    $application->fqdn = 'https://protected.example.com';
+    $application->ports_exposes = '3000';
+    $application->ports_mappings = '9010:3000';
+    $applicationSettings = new ApplicationSetting;
+    $applicationSettings->setRawAttributes([
+        'is_force_https_enabled' => true,
+        'is_static' => false,
+    ]);
+    $application->setRelation('settings', $applicationSettings);
+
+    $manager->syncApplicationWithServers($application, $edgeProxyServer, $deploymentServer);
+
+    preg_match("/echo '([^']+)' \\| base64 -d/", $manager->calls[0]['commands'][1], $payloadMatches);
+    $payload = base64_decode($payloadMatches[1]);
+
+    expect($payload)->toContain('https://10.8.0.32:443')
+        ->and($payload)->not->toContain('http://10.8.0.32:9010')
+        ->and($payload)->toContain('passHostHeader: true')
+        ->and($payload)->toContain('insecureSkipVerify: true');
+});
+
+it('routes an http-only application domain through the deployment proxy http entrypoint', function () {
+    $manager = new class extends EdgeProxyRemoteRouteService
+    {
+        public array $calls = [];
+
+        protected function runRemoteCommands(Server $server, array $commands, bool $throwError = true): ?string
+        {
+            $this->calls[] = [
+                'commands' => $commands,
+                'throw_error' => $throwError,
+            ];
+
+            return null;
+        }
+    };
+
+    $edgeProxyServer = Mockery::mock(Server::class)->makePartial();
+    $edgeProxyServer->id = 0;
+    $edgeProxyServer->shouldReceive('proxyType')->andReturn('TRAEFIK');
+    $edgeProxyServer->shouldReceive('proxyPath')->andReturn('/tmp/proxy');
+
+    $deploymentServer = Mockery::mock(Server::class)->makePartial();
+    $deploymentServer->id = 32;
+    $deploymentServer->ip = '10.8.0.32';
+    $deploymentServer->proxy = ['type' => 'TRAEFIK'];
+
+    $application = new Application;
+    $application->uuid = 'http-application-fallback';
+    $application->build_pack = 'nixpacks';
+    $application->fqdn = 'http://plain.example.com:3000';
+    $application->ports_mappings = null;
+    $application->ports_exposes = '3000';
+
+    $warnings = $manager->syncApplicationWithServers($application, $edgeProxyServer, $deploymentServer);
+
+    expect($warnings)->toBe([])
+        ->and($manager->calls)->toHaveCount(1);
+
+    preg_match("/echo '([^']+)' \\| base64 -d/", $manager->calls[0]['commands'][1], $payloadMatches);
+    $payload = base64_decode($payloadMatches[1]);
+
+    expect($payload)->toContain('http://10.8.0.32:80')
+        ->and($payload)->toContain('Host(`plain.example.com`)')
+        ->and($payload)->not->toContain('redirectScheme')
+        ->and($payload)->not->toContain('certResolver')
+        ->and($payload)->not->toContain('- https');
+});
+
+it('uses the deployment proxy when an application domain targets an unknown internal port', function () {
     $manager = new class extends EdgeProxyRemoteRouteService
     {
         public array $calls = [];
@@ -842,11 +1020,9 @@ it('does not fall back through the deployment proxy when an application domain t
 
     $warnings = $manager->syncApplicationWithServers($application, $edgeProxyServer, $deploymentServer);
 
-    expect($warnings)->not->toBeEmpty()
-        ->and($warnings[0])->toContain('published host port could not be resolved')
-        ->and(collect($warnings)->contains(fn (string $warning) => ! str_contains($warning, 'deployment server HTTPS proxy instead')))->toBeTrue()
+    expect($warnings)->toBe([])
         ->and(implode("\n", $manager->calls[0]['commands']))->toContain('/tmp/proxy/dynamic/application-remote-application-invalid-fallback-port.yaml')
-        ->and(implode("\n", $manager->calls[0]['commands']))->not->toContain('tee');
+        ->and(implode("\n", $manager->calls[0]['commands']))->toContain('tee');
 });
 
 it('keeps valid application edge routes when one domain port cannot be resolved and returns warning only for invalid domain', function () {
@@ -898,7 +1074,7 @@ YAML;
     $writeCommands = implode("\n", $manager->calls[0]['commands']);
     expect($writeCommands)->toContain('/tmp/proxy/dynamic/application-remote-application-partial-routes.yaml')
         ->and($writeCommands)->toContain('tee')
-        ->and($writeCommands)->not->toContain('rm -f');
+        ->and($writeCommands)->not->toContain("rm -f '/tmp/proxy/dynamic/application-remote-application-partial-routes.yaml'");
 
     preg_match("/echo '([^']+)' \\| base64 -d/", $manager->calls[0]['commands'][1], $payloadMatches);
     $payload = base64_decode($payloadMatches[1]);
@@ -956,7 +1132,7 @@ YAML;
         ->and(implode("\n", $manager->calls[0]['commands']))->not->toContain('tee');
 });
 
-it('keeps service edge route files for HSTS-sensitive domains by falling back to the deployment proxy https entrypoint', function () {
+it('routes HSTS-sensitive service domains through the deployment proxy https entrypoint', function () {
     $manager = new class extends EdgeProxyRemoteRouteService
     {
         public array $calls = [];
@@ -1000,8 +1176,7 @@ YAML;
 
     $warnings = $manager->syncServiceWithServers($service, $edgeProxyServer, $deploymentServer);
 
-    expect($warnings)->not->toBeEmpty()
-        ->and(collect($warnings)->contains(fn (string $warning) => str_contains($warning, 'deployment server HTTPS proxy instead')))
+    expect($warnings)->toBe([])
         ->and($manager->calls)->toHaveCount(1);
 
     preg_match("/echo '([^']+)' \\| base64 -d/", $manager->calls[0]['commands'][1], $payloadMatches);
@@ -1065,7 +1240,7 @@ YAML;
     $writeCommands = implode("\n", $manager->calls[0]['commands']);
     expect($writeCommands)->toContain('/tmp/proxy/dynamic/service-remote-service-partial-routes.yaml')
         ->and($writeCommands)->toContain('tee')
-        ->and($writeCommands)->not->toContain('rm -f');
+        ->and($writeCommands)->not->toContain("rm -f '/tmp/proxy/dynamic/service-remote-service-partial-routes.yaml'");
 
     preg_match("/echo '([^']+)' \\| base64 -d/", $manager->calls[0]['commands'][1], $payloadMatches);
     $payload = base64_decode($payloadMatches[1]);
@@ -1125,7 +1300,7 @@ YAML;
         ->and(implode("\n", $manager->calls[0]['commands']))->not->toContain('tee');
 });
 
-it('returns warning instead of throwing when edge route file write fails', function () {
+it('throws when an edge route file write fails so the queued sync can retry', function () {
     $manager = new class extends EdgeProxyRemoteRouteService
     {
         public array $calls = [];
@@ -1171,11 +1346,10 @@ YAML;
     $service->setRelation('applications', collect([$application]));
     $application->setRelation('service', $service);
 
-    $warnings = $manager->syncServiceWithServers($service, $edgeProxyServer, $deploymentServer);
+    expect(fn () => $manager->syncServiceWithServers($service, $edgeProxyServer, $deploymentServer))
+        ->toThrow(RuntimeException::class, 'edge ssh unavailable');
 
-    expect($warnings)->not->toBeEmpty()
-        ->and(collect($warnings)->contains(fn (string $warning) => str_contains($warning, 'failed to write dynamic route configuration')))
-        ->and($manager->calls)->toHaveCount(1);
+    expect($manager->calls)->toHaveCount(1);
 });
 
 it('normalizes remote tunnel host values before generating upstream url', function () {
@@ -2025,7 +2199,7 @@ it('prunes orphan edge route files whose resource no longer exists and keeps val
     expect($warnings)->toHaveCount(2);
 
     $deletes = implode("\n", $manager->deleteCommands);
-    expect($deletes)->toContain("/tmp/proxy/dynamic/application-remote-deletedapp.yaml")
+    expect($deletes)->toContain('/tmp/proxy/dynamic/application-remote-deletedapp.yaml')
         ->and($deletes)->toContain('/tmp/proxy/dynamic/service-remote-deletedservice.yaml')
         ->and($deletes)->not->toContain('keepapp')
         ->and($deletes)->not->toContain('keepservice')

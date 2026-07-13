@@ -3,10 +3,12 @@
 use App\Exceptions\EdgeProxyCleanupPendingException;
 use App\Jobs\DeleteResourceJob;
 use App\Models\Application;
+use App\Models\Server;
 use App\Models\Service;
 use App\Services\EdgeProxyRemotePortForwardService;
 use App\Services\EdgeProxyRemoteRouteService;
 use Illuminate\Queue\Middleware\WithoutOverlapping;
+use Illuminate\Support\Collection;
 
 it('keeps application pending deletion when edge route cleanup fails', function () {
     $application = Mockery::mock(Application::class)->makePartial();
@@ -110,26 +112,26 @@ it('keeps application pending deletion when concrete edge port cleanup hits an s
 
     $routeService = new class extends EdgeProxyRemoteRouteService
     {
-        protected function resolveEdgeProxyServersByTeamId(?int $teamId): \Illuminate\Support\Collection
+        protected function resolveEdgeProxyServersByTeamId(?int $teamId): Collection
         {
             return collect();
         }
     };
 
-    $edgeProxyServer = Mockery::mock(\App\Models\Server::class)->makePartial();
+    $edgeProxyServer = Mockery::mock(Server::class)->makePartial();
     $edgeProxyServer->id = 402;
     $edgeProxyServer->name = 'edge-port-timeout';
 
     $portForwardService = new class($edgeProxyServer) extends EdgeProxyRemotePortForwardService
     {
-        public function __construct(private \App\Models\Server $edgeProxyServer) {}
+        public function __construct(private Server $edgeProxyServer) {}
 
-        protected function resolveEdgeProxyServersByTeamId(?int $teamId): \Illuminate\Support\Collection
+        protected function resolveEdgeProxyServersByTeamId(?int $teamId): Collection
         {
             return collect([$this->edgeProxyServer]);
         }
 
-        protected function runRemoteCommands(\App\Models\Server $server, array $commands, bool $throwError = true): ?string
+        protected function runRemoteCommands(Server $server, array $commands, bool $throwError = true): ?string
         {
             throw new RuntimeException('ssh: connect to host 10.10.10.11 port 22: Connection timed out');
         }
@@ -263,7 +265,7 @@ it('releases queued service deletion when edge cleanup is still pending', functi
         ->and($job->cleanupQueueCount)->toBe(1);
 });
 
-it('uses a resource-scoped overlapping lock to prevent concurrent deletions', function () {
+it('uses the shared application edge lock to prevent deletion and sync races', function () {
     $application = new Application;
     $application->uuid = 'application-delete-lock';
 
@@ -279,6 +281,8 @@ it('uses a resource-scoped overlapping lock to prevent concurrent deletions', fu
 
     expect($middlewares)->toHaveCount(1)
         ->and($middlewares[0])->toBeInstanceOf(WithoutOverlapping::class)
-        ->and($job->lockKey())->toContain('delete-resource-')
-        ->and($job->lockKey())->toContain('application-delete-lock');
+        ->and($middlewares[0]->key)->toBe('application-edge-proxy-application-delete-lock')
+        ->and($middlewares[0]->shareKey)->toBeTrue()
+        ->and($middlewares[0]->releaseAfter)->toBe(30)
+        ->and($job->tries)->toBe(0);
 });

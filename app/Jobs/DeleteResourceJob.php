@@ -7,8 +7,10 @@ use App\Actions\Database\StopDatabase;
 use App\Actions\Server\CleanupDocker;
 use App\Actions\Service\DeleteService;
 use App\Actions\Service\StopService;
+use App\Enums\ApplicationDeploymentStatus;
 use App\Exceptions\EdgeProxyCleanupPendingException;
 use App\Models\Application;
+use App\Models\ApplicationDeploymentQueue;
 use App\Models\ApplicationPreview;
 use App\Models\Service;
 use App\Models\StandaloneClickhouse;
@@ -42,6 +44,10 @@ class DeleteResourceJob implements ShouldBeEncrypted, ShouldQueue
         public bool $deleteConfigurations = true,
         public bool $dockerCleanup = true
     ) {
+        if ($this->resource instanceof Application) {
+            $this->tries = 0;
+        }
+
         $this->onQueue('high');
     }
 
@@ -52,6 +58,10 @@ class DeleteResourceJob implements ShouldBeEncrypted, ShouldQueue
 
     public function middleware(): array
     {
+        if ($this->resource instanceof Application) {
+            return [(new WithoutOverlapping('application-edge-proxy-'.$this->resource->uuid))->shared()->releaseAfter(30)->expireAfter(36600)];
+        }
+
         return [(new WithoutOverlapping($this->deletionLockKey()))->expireAfter(3600)->dontRelease()];
     }
 
@@ -250,11 +260,11 @@ class DeleteResourceJob implements ShouldBeEncrypted, ShouldQueue
         }
 
         // Cancel any active deployments for this PR (same logic as API cancel_deployment)
-        $activeDeployments = \App\Models\ApplicationDeploymentQueue::where('application_id', $application->id)
+        $activeDeployments = ApplicationDeploymentQueue::where('application_id', $application->id)
             ->where('pull_request_id', $pull_request_id)
             ->whereIn('status', [
-                \App\Enums\ApplicationDeploymentStatus::QUEUED->value,
-                \App\Enums\ApplicationDeploymentStatus::IN_PROGRESS->value,
+                ApplicationDeploymentStatus::QUEUED->value,
+                ApplicationDeploymentStatus::IN_PROGRESS->value,
             ])
             ->get();
 
@@ -262,7 +272,7 @@ class DeleteResourceJob implements ShouldBeEncrypted, ShouldQueue
             try {
                 // Mark deployment as cancelled
                 $activeDeployment->update([
-                    'status' => \App\Enums\ApplicationDeploymentStatus::CANCELLED_BY_USER->value,
+                    'status' => ApplicationDeploymentStatus::CANCELLED_BY_USER->value,
                 ]);
 
                 // Add cancellation log entry

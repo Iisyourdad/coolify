@@ -1,12 +1,14 @@
 <?php
 
 use App\Enums\ProxyTypes;
+use App\Jobs\SyncApplicationEdgeProxyJob;
 use App\Models\Application;
 use App\Models\Environment;
 use App\Models\Project;
 use App\Models\Server;
 use App\Models\StandaloneDocker;
 use App\Models\Team;
+use App\Services\EdgeProxyRemotePortForwardService;
 use App\Services\EdgeProxyRemoteRouteService;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
 use Illuminate\Support\Facades\Queue;
@@ -39,7 +41,7 @@ it('writes a new remote application route on the master domain router', function
         'destination_type' => $destination->getMorphClass(),
         'fqdn' => 'https://remote-app.example.com',
         'ports_exposes' => '3000',
-        'ports_mappings' => '18080:3000',
+        'ports_mappings' => null,
     ]);
 
     $routeService = new class extends EdgeProxyRemoteRouteService
@@ -57,7 +59,15 @@ it('writes a new remote application route on the master domain router', function
         }
     };
 
-    expect($routeService->syncApplication($application->fresh()))->toBe([]);
+    $portForwardService = Mockery::mock(EdgeProxyRemotePortForwardService::class);
+    $portForwardService->shouldReceive('syncApplication')
+        ->once()
+        ->andReturn([]);
+
+    $queuedJob = Queue::pushed(SyncApplicationEdgeProxyJob::class)->first();
+    expect($queuedJob)->toBeInstanceOf(SyncApplicationEdgeProxyJob::class);
+
+    $queuedJob->handle($routeService, $portForwardService);
 
     $writeCall = collect($routeService->calls)->first(fn (array $call) => collect($call['commands'])->contains(
         fn (string $command) => str_contains($command, 'application-remote-'.$application->uuid.'.yaml.tmp')
@@ -74,5 +84,7 @@ it('writes a new remote application route on the master domain router', function
 
     expect($routeConfiguration)
         ->toContain('Host(`remote-app.example.com`)')
-        ->toContain('http://10.8.0.20:18080');
+        ->toContain('https://10.8.0.20:443')
+        ->toContain('passHostHeader: true')
+        ->toContain('insecureSkipVerify: true');
 });
