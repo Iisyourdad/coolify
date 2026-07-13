@@ -93,6 +93,7 @@ class EditDomain extends Component
             if ($warning) {
                 $this->dispatch('warning', __('warning.sslipdomain'));
             }
+            $domains = ValidationPatterns::applicationDomainList($this->fqdn);
             $server = data_get($this->application, 'service.server');
             if ($server instanceof Server) {
                 foreach ($domains as $domain) {

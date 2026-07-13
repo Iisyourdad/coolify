@@ -42,3 +42,17 @@ it('ensures EditDomain dispatches refreshServices event on submit', function () 
     expect($editDomainFile)
         ->toContain("->dispatch('refreshServices')");
 });
+
+it('ensures EditDomain parses fqdn domains before validation', function () {
+    $editDomainFile = file_get_contents(__DIR__.'/../../app/Livewire/Project/Service/EditDomain.php');
+
+    expect($editDomainFile)
+        ->toContain('ValidationPatterns::applicationDomainList($this->fqdn);');
+});
+
+it('ensures Service Index parses fqdn domains before validation', function () {
+    $serviceIndexFile = file_get_contents(__DIR__.'/../../app/Livewire/Project/Service/Index.php');
+
+    expect($serviceIndexFile)
+        ->toContain('ValidationPatterns::applicationDomainList($this->fqdn);');
+});

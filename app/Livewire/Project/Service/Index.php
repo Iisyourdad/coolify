@@ -498,6 +498,7 @@ class Index extends Component
             if ($warning) {
                 $this->dispatch('warning', __('warning.sslipdomain'));
             }
+            $domains = ValidationPatterns::applicationDomainList($this->fqdn);
             $server = data_get($this->serviceApplication, 'service.server');
             if ($server instanceof Server) {
                 foreach ($domains as $domain) {
