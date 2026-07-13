@@ -74,8 +74,29 @@ trait ResolvesEdgeProxyServer
         return Server::query()
             ->where('team_id', $teamId)
             ->whereProxyType(ProxyTypes::TRAEFIK->value)
+            ->with('settings')
             ->orderBy('id')
             ->get();
+    }
+
+    /**
+     * Routine reconciliation must not wait on servers Coolify already knows are unreachable.
+     * Explicit resource deletion still uses resolveEdgeProxyServersByTeamId() so cleanup is
+     * retried everywhere when removing a resource permanently.
+     *
+     * @return Collection<int, Server>
+     */
+    protected function resolveReachableEdgeProxyServersByTeamId(?int $teamId): Collection
+    {
+        return $this->resolveEdgeProxyServersByTeamId($teamId)
+            ->filter(function (Server $server): bool {
+                if (! $server->relationLoaded('settings')) {
+                    return true;
+                }
+
+                return data_get($server, 'settings.is_reachable') !== false;
+            })
+            ->values();
     }
 
     protected function resolveRemoteHost(Server $deploymentServer): ?string

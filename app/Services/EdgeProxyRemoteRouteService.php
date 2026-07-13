@@ -482,7 +482,7 @@ class EdgeProxyRemoteRouteService
             return $this->deleteService($service);
         }
 
-        return $this->resolveEdgeProxyServersByTeamId($this->extractServiceTeamId($service))
+        return $this->resolveReachableEdgeProxyServersByTeamId($this->extractServiceTeamId($service))
             ->reject(fn (Server $edgeProxyServer) => $edgeProxyServer->id === $currentEdgeProxyServer->id)
             ->flatMap(fn (Server $edgeProxyServer) => $this->deleteServiceWithServer($service, $edgeProxyServer))
             ->values()
@@ -495,7 +495,7 @@ class EdgeProxyRemoteRouteService
             return $this->deleteApplication($application);
         }
 
-        return $this->resolveEdgeProxyServersByTeamId($this->extractApplicationTeamId($application))
+        return $this->resolveReachableEdgeProxyServersByTeamId($this->extractApplicationTeamId($application))
             ->reject(fn (Server $edgeProxyServer) => $edgeProxyServer->id === $currentEdgeProxyServer->id)
             ->flatMap(fn (Server $edgeProxyServer) => $this->deleteApplicationWithServer($application, $edgeProxyServer))
             ->values()

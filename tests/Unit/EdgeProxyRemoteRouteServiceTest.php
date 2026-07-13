@@ -2160,6 +2160,33 @@ it('returns cleanup failure details when deleting service edge route files hits 
         ->and($failures[0])->toContain('No route to host');
 });
 
+it('excludes unreachable edge servers from routine reconciliation cleanup', function () {
+    $reachableEdgeProxyServer = new Server;
+    $reachableEdgeProxyServer->id = 401;
+    $reachableEdgeProxyServer->setRelation('settings', (object) ['is_reachable' => true]);
+
+    $unreachableEdgeProxyServer = new Server;
+    $unreachableEdgeProxyServer->id = 402;
+    $unreachableEdgeProxyServer->setRelation('settings', (object) ['is_reachable' => false]);
+
+    $manager = new class($reachableEdgeProxyServer, $unreachableEdgeProxyServer) extends EdgeProxyRemoteRouteService
+    {
+        public function __construct(private Server $reachableEdgeProxyServer, private Server $unreachableEdgeProxyServer) {}
+
+        public function cleanupCandidates(?int $teamId): Collection
+        {
+            return $this->resolveReachableEdgeProxyServersByTeamId($teamId);
+        }
+
+        protected function resolveEdgeProxyServersByTeamId(?int $teamId): Collection
+        {
+            return collect([$this->reachableEdgeProxyServer, $this->unreachableEdgeProxyServer]);
+        }
+    };
+
+    expect($manager->cleanupCandidates(92)->pluck('id')->all())->toBe([401]);
+});
+
 it('prunes orphan edge route files whose resource no longer exists and keeps valid ones', function () {
     $manager = new class extends EdgeProxyRemoteRouteService
     {
