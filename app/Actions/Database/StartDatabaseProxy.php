@@ -175,8 +175,6 @@ class StartDatabaseProxy
                     )
                 );
 
-                ray("Database proxy for {$database->name} disabled due to non-transient error: {$e->getMessage()}");
-
                 return;
             }
 
