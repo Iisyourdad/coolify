@@ -68,6 +68,31 @@ class SshRetryMechanismTest extends TestCase
         );
     }
 
+    public function test_transient_docker_snapshot_errors_are_retryable()
+    {
+        $handler = new class
+        {
+            use SshRetryable;
+
+            public function test_is_retryable_ssh_error($error)
+            {
+                return $this->isRetryableSshError($error);
+            }
+        };
+
+        $dockerErrors = [
+            'failed to commit snapshot extract-493093883-ZvXI sha256:ff21be3dd2248bc35617d056ff31a3412fc722fb026d05b3130e1132a1266d87: NotFound: lease does not exist: not found',
+            'failed to prepare extraction snapshot "extract-549308819-2Mnm": parent snapshot sha256:7a7fd2a8d52e does not exist: not found',
+        ];
+
+        foreach ($dockerErrors as $error) {
+            $this->assertTrue(
+                $handler->test_is_retryable_ssh_error($error),
+                "Failed to identify as retryable: $error"
+            );
+        }
+    }
+
     public function test_non_ssh_errors_are_not_retryable()
     {
         $handler = new class
@@ -88,6 +113,7 @@ class SshRetryMechanismTest extends TestCase
             'File not found',
             'Syntax error',
             'Invalid argument',
+            'Container image cache corrupted',
         ];
 
         foreach ($nonSshErrors as $error) {
