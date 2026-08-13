@@ -4,11 +4,11 @@ use App\Livewire\Destination\Resources as DestinationResources;
 use App\Livewire\Destination\Show as DestinationShow;
 use App\Livewire\Project\New\DockerCompose;
 use App\Livewire\Project\New\DockerImage;
-use App\Livewire\Project\Shared\Destination as SharedDestination;
 use App\Livewire\Project\New\GithubPrivateRepository;
 use App\Livewire\Project\New\GithubPrivateRepositoryDeployKey;
 use App\Livewire\Project\New\PublicGitRepository;
 use App\Livewire\Project\New\SimpleDockerfile;
+use App\Livewire\Project\Shared\Destination as SharedDestination;
 use App\Models\Application;
 use App\Models\Environment;
 use App\Models\InstanceSettings;
@@ -302,7 +302,7 @@ describe('Destination/Show team scope', function () {
             ->assertSee('General')
             ->assertSee('Resources')
             ->assertDontSee('Search resources...')
-            ->assertDontSee('No resources are using this destination.');
+            ->assertDontSee('No resources use this destination');
     });
 
     test('mount with own standalone destination lists deployed resources', function () {
@@ -328,10 +328,10 @@ describe('Destination/Show team scope', function () {
         ]));
 
         Livewire::test(DestinationResources::class, ['destination_uuid' => $this->destinationA->uuid])
-            ->assertSee('Search resources...')
+            ->assertSee('Search resources')
             ->assertSee('Project')
             ->assertSee('Environment')
-            ->assertSee('Name')
+            ->assertSee('Resource')
             ->assertSee('Type')
             ->assertSee('application-on-destination')
             ->assertSee('service-on-destination')
@@ -342,7 +342,7 @@ describe('Destination/Show team scope', function () {
 
     test('mount with own standalone destination shows empty state without resources', function () {
         Livewire::test(DestinationResources::class, ['destination_uuid' => $this->destinationA->uuid])
-            ->assertSee('No resources are using this destination.');
+            ->assertSee('No resources use this destination');
     });
 
     test('mount with own standalone destination does not list another team resources', function () {
@@ -376,6 +376,12 @@ describe('Destination/Show team scope', function () {
 
 describe('Project/Shared/Destination addServer', function () {
     test('addServer queues a deploy when adding a running application to a brand new node', function () {
+        $secondaryServer = Server::factory()->create(['team_id' => $this->teamA->id]);
+        $secondaryDestination = StandaloneDocker::factory()->create([
+            'server_id' => $secondaryServer->id,
+            'name' => 'dest-secondary-'.fake()->unique()->word(),
+            'network' => 'coolify-secondary-'.fake()->unique()->word(),
+        ]);
         $application = Application::factory()->create([
             'environment_id' => $this->environmentA->id,
             'destination_id' => $this->destinationA->id,
@@ -384,8 +390,8 @@ describe('Project/Shared/Destination addServer', function () {
             'docker_registry_image_name' => 'ghcr.io/coollabsio/example:latest',
         ]);
 
-        $application->additional_networks()->attach($this->destinationB->id, [
-            'server_id' => $this->serverB->id,
+        $application->additional_networks()->attach($secondaryDestination->id, [
+            'server_id' => $secondaryServer->id,
             'status' => 'running:healthy',
         ]);
 
@@ -406,18 +412,18 @@ describe('Project/Shared/Destination addServer', function () {
         };
 
         $component->resource = $application->fresh();
-        $component->addServer($this->destinationB->id, $this->serverB->id);
+        $component->addServer($secondaryDestination->id, $secondaryServer->id);
 
         expect($component->redeployCalls)->toHaveCount(1)
-            ->and($component->redeployCalls[0]['network_id'])->toBe($this->destinationB->id)
-            ->and($component->redeployCalls[0]['server_id'])->toBe($this->serverB->id)
+            ->and($component->redeployCalls[0]['network_id'])->toBe($secondaryDestination->id)
+            ->and($component->redeployCalls[0]['server_id'])->toBe($secondaryServer->id)
             ->and($component->redeployCalls[0]['only_this_server'])->toBeTrue();
 
-        expect($application->fresh()->additional_networks->pluck('id'))->toContain($this->destinationB->id);
+        expect($application->fresh()->additional_networks->pluck('id'))->toContain($secondaryDestination->id);
         $this->assertDatabaseHas('additional_destinations', [
             'application_id' => $application->id,
-            'server_id' => $this->serverB->id,
-            'standalone_docker_id' => $this->destinationB->id,
+            'server_id' => $secondaryServer->id,
+            'standalone_docker_id' => $secondaryDestination->id,
         ]);
     });
 });

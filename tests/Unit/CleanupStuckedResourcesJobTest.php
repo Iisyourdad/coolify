@@ -5,6 +5,9 @@ use App\Jobs\DeleteResourceJob;
 use App\Models\Application;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Queue;
+use Tests\TestCase;
+
+uses(TestCase::class);
 
 beforeEach(function () {
     Cache::forget(CleanupStuckedResourcesJob::debounceKey());

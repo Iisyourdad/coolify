@@ -2,6 +2,8 @@
 
 namespace App\Models;
 
+use App\Jobs\SyncServiceEdgeProxyJob;
+use App\Traits\HasNoindexDomains;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\SoftDeletes;
@@ -9,7 +11,7 @@ use Symfony\Component\Yaml\Yaml;
 
 class ServiceApplication extends BaseModel
 {
-    use HasFactory, SoftDeletes;
+    use HasFactory, HasNoindexDomains, SoftDeletes;
 
     protected $fillable = [
         'service_id',
@@ -17,6 +19,9 @@ class ServiceApplication extends BaseModel
         'human_name',
         'description',
         'fqdn',
+        'noindex_domains',
+        'redirect',
+        'domain_dns_statuses',
         'ports',
         'exposes',
         'status',
@@ -32,13 +37,27 @@ class ServiceApplication extends BaseModel
         'is_migrated',
     ];
 
-    protected $casts = [
-        'exclude_from_master_domain_routing' => 'boolean',
-        'exclude_from_status' => 'boolean',
-        'is_log_drain_enabled' => 'boolean',
-        'is_gzip_enabled' => 'boolean',
-        'is_stripprefix_enabled' => 'boolean',
+    /**
+     * Internal DNS check cache — not part of the public API surface.
+     *
+     * @var list<string>
+     */
+    protected $hidden = [
+        'domain_dns_statuses',
     ];
+
+    protected function casts(): array
+    {
+        return [
+            'domain_dns_statuses' => 'array',
+            'noindex_domains' => 'array',
+            'exclude_from_master_domain_routing' => 'boolean',
+            'exclude_from_status' => 'boolean',
+            'is_log_drain_enabled' => 'boolean',
+            'is_gzip_enabled' => 'boolean',
+            'is_stripprefix_enabled' => 'boolean',
+        ];
+    }
 
     protected static function booted()
     {
@@ -51,7 +70,46 @@ class ServiceApplication extends BaseModel
             if ($service->isDirty('status')) {
                 $service->last_online_at = now();
             }
+            if ($service->isDirty('fqdn')) {
+                $service->syncNoindexDomains();
+            }
         });
+        static::updated(function ($serviceApplication) {
+            if (! $serviceApplication->wasChanged([
+                'fqdn',
+                'noindex_domains',
+                'redirect',
+                'exclude_from_master_domain_routing',
+            ])) {
+                return;
+            }
+
+            $serviceApplication->queueEdgeProxySyncIfNeeded();
+        });
+    }
+
+    private function queueEdgeProxySyncIfNeeded(): void
+    {
+        $this->loadMissing('service.environment.project');
+        $service = $this->getRelation('service');
+        $teamId = data_get($service, 'environment.project.team_id');
+        if (is_null($teamId)) {
+            return;
+        }
+
+        $masterDomainRouterId = Server::query()
+            ->where('team_id', $teamId)
+            ->whereRelation('settings', 'is_master_domain_router_enabled', true)
+            ->value('id');
+
+        if (
+            is_null($masterDomainRouterId) ||
+            (int) data_get($service, 'server_id') === (int) $masterDomainRouterId
+        ) {
+            return;
+        }
+
+        SyncServiceEdgeProxyJob::dispatch($service)->afterCommit();
     }
 
     public function restart()

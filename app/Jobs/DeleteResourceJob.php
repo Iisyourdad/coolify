@@ -7,6 +7,7 @@ use App\Actions\Database\StopDatabase;
 use App\Actions\Server\CleanupDocker;
 use App\Actions\Service\DeleteService;
 use App\Actions\Service\StopService;
+use App\Actions\Shared\DeleteScheduledVolumeBackup;
 use App\Enums\ApplicationDeploymentStatus;
 use App\Exceptions\EdgeProxyCleanupPendingException;
 use App\Models\Application;
@@ -67,6 +68,10 @@ class DeleteResourceJob implements ShouldBeEncrypted, ShouldQueue
 
     public function handle()
     {
+        if (! $this->resource instanceof ApplicationPreview) {
+            $this->deleteScheduledVolumeBackups();
+        }
+
         try {
             // Handle ApplicationPreview instances separately
             if ($this->resource instanceof ApplicationPreview) {
@@ -246,6 +251,28 @@ class DeleteResourceJob implements ShouldBeEncrypted, ShouldQueue
         $resourceIdentifier = data_get($this->resource, 'uuid') ?? data_get($this->resource, 'id') ?? spl_object_id($this->resource);
 
         return 'delete-resource-'.$this->resource->getMorphClass().'-'.$resourceIdentifier;
+    }
+
+    private function deleteScheduledVolumeBackups(): void
+    {
+        if (! $this->resource->exists) {
+            return;
+        }
+
+        $server = data_get($this->resource, 'server') ?? data_get($this->resource, 'destination.server');
+        $resources = $this->resource instanceof Service
+            ? $this->resource->applications()->get()->concat($this->resource->databases()->get())
+            : collect([$this->resource]);
+
+        foreach ($resources as $resource) {
+            $storages = $resource->persistentStorages()->get()->concat($resource->fileStorages()->get());
+
+            foreach ($storages as $storage) {
+                foreach ($storage->scheduledBackups()->get() as $backup) {
+                    DeleteScheduledVolumeBackup::run($backup, $server);
+                }
+            }
+        }
     }
 
     private function deleteApplicationPreview()

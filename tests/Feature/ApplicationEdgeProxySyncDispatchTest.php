@@ -2,10 +2,13 @@
 
 use App\Enums\ProxyTypes;
 use App\Jobs\SyncApplicationEdgeProxyJob;
+use App\Jobs\SyncServiceEdgeProxyJob;
 use App\Models\Application;
 use App\Models\Environment;
 use App\Models\Project;
 use App\Models\Server;
+use App\Models\Service;
+use App\Models\ServiceApplication;
 use App\Models\StandaloneDocker;
 use App\Models\Team;
 use App\Services\EdgeProxyRemotePortForwardService;
@@ -105,6 +108,83 @@ it('does not queue master route reconciliation for unrelated application changes
     $application->update(['name' => 'renamed-application']);
 
     Queue::assertNotPushed(SyncApplicationEdgeProxyJob::class);
+});
+
+it('queues application route reconciliation when noindex or redirect changes', function () {
+    $team = Team::factory()->create();
+    $masterServer = Server::factory()->create([
+        'team_id' => $team->id,
+        'proxy' => ['type' => ProxyTypes::TRAEFIK->value],
+    ]);
+    $masterServer->settings->update(['is_master_domain_router_enabled' => true]);
+
+    $deploymentServer = Server::factory()->create(['team_id' => $team->id]);
+    $destination = StandaloneDocker::query()->where('server_id', $deploymentServer->id)->firstOrFail();
+    $project = Project::factory()->create(['team_id' => $team->id]);
+    $environment = Environment::factory()->create(['project_id' => $project->id]);
+
+    Queue::fake();
+
+    $application = Application::factory()->create([
+        'environment_id' => $environment->id,
+        'destination_id' => $destination->id,
+        'destination_type' => $destination->getMorphClass(),
+        'fqdn' => 'https://existing-app.example.com,https://www.existing-app.example.com',
+        'redirect' => 'both',
+    ]);
+
+    Queue::fake();
+
+    $application->update(['noindex_domains' => ['https://existing-app.example.com']]);
+
+    Queue::assertPushed(SyncApplicationEdgeProxyJob::class, fn (SyncApplicationEdgeProxyJob $job) => $job->application->is($application));
+
+    Queue::fake();
+
+    $application->update(['redirect' => 'www']);
+
+    Queue::assertPushed(SyncApplicationEdgeProxyJob::class, fn (SyncApplicationEdgeProxyJob $job) => $job->application->is($application));
+});
+
+it('queues service route reconciliation when service application noindex or redirect changes', function () {
+    $team = Team::factory()->create();
+    $masterServer = Server::factory()->create([
+        'team_id' => $team->id,
+        'proxy' => ['type' => ProxyTypes::TRAEFIK->value],
+    ]);
+    $masterServer->settings->update(['is_master_domain_router_enabled' => true]);
+
+    $deploymentServer = Server::factory()->create(['team_id' => $team->id]);
+    $destination = StandaloneDocker::query()->where('server_id', $deploymentServer->id)->firstOrFail();
+    $project = Project::factory()->create(['team_id' => $team->id]);
+    $environment = Environment::factory()->create(['project_id' => $project->id]);
+
+    Queue::fake();
+
+    $service = Service::factory()->create([
+        'environment_id' => $environment->id,
+        'server_id' => $deploymentServer->id,
+        'destination_id' => $destination->id,
+        'destination_type' => $destination->getMorphClass(),
+    ]);
+    $serviceApplication = ServiceApplication::query()->create([
+        'service_id' => $service->id,
+        'name' => 'web',
+        'fqdn' => 'https://service.example.com,https://www.service.example.com',
+        'redirect' => 'both',
+    ]);
+
+    Queue::fake();
+
+    $serviceApplication->update(['noindex_domains' => ['https://service.example.com']]);
+
+    Queue::assertPushed(SyncServiceEdgeProxyJob::class, fn (SyncServiceEdgeProxyJob $job) => $job->service->is($service));
+
+    Queue::fake();
+
+    $serviceApplication->update(['redirect' => 'www']);
+
+    Queue::assertPushed(SyncServiceEdgeProxyJob::class, fn (SyncServiceEdgeProxyJob $job) => $job->service->is($service));
 });
 
 it('queues master route reconciliation when routing settings change', function () {

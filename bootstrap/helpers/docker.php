@@ -5,11 +5,43 @@ use App\Models\Application;
 use App\Models\ApplicationPreview;
 use App\Models\Server;
 use App\Models\ServiceApplication;
+use App\Support\ValidationPatterns;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 use Spatie\Url\Url;
 use Symfony\Component\Yaml\Yaml;
+
+/**
+ * Stable short hash for compose service names used in Traefik router/service IDs.
+ * Keeps api.test vs api-test distinct after label-safe normalization.
+ */
+function traefikServiceNameHash(string $serviceName): string
+{
+    return substr(md5($serviceName), 0, 4);
+}
+
+/**
+ * Label-safe Traefik router/service name segment for a compose service.
+ * Dots (and other non [a-zA-Z0-9-]) break Docker/Traefik label paths; always append a hash
+ * so normalized names like api.test and api-test never collide.
+ */
+function traefikSafeServiceNameSegment(string $serviceName): string
+{
+    $normalized = str($serviceName)
+        ->replace('.', '-')
+        ->replace('_', '-')
+        ->replaceMatches('/[^a-zA-Z0-9-]+/', '-')
+        ->replaceMatches('/-+/', '-')
+        ->trim('-')
+        ->toString();
+
+    if ($normalized === '') {
+        $normalized = 'service';
+    }
+
+    return $normalized.'-'.traefikServiceNameHash($serviceName);
+}
 
 function getCurrentApplicationContainerStatus(Server $server, int $id, ?int $pullRequestId = null, ?bool $includePullrequests = false): Collection
 {
@@ -388,7 +420,21 @@ function generateServiceSpecificFqdns(ServiceApplication|Application $resource)
     return $payload;
 }
 
-function fqdnLabelsForCaddy(string $network, string $uuid, Collection $domains, bool $is_force_https_enabled = false, $onlyPort = null, ?Collection $serviceLabels = null, ?bool $is_gzip_enabled = true, ?bool $is_stripprefix_enabled = true, ?string $service_name = null, ?string $image = null, string $redirect_direction = 'both', ?string $predefinedPort = null, bool $is_http_basic_auth_enabled = false, ?string $http_basic_auth_username = null, ?string $http_basic_auth_password = null)
+/**
+ * @param  Collection<int, string>|null  $noindex_domains
+ */
+function isNoindexDomain(string $domain, ?Collection $noindex_domains): bool
+{
+    if (blank($noindex_domains)) {
+        return false;
+    }
+
+    return $noindex_domains
+        ->map(fn (string $noindex_domain) => ValidationPatterns::normalizeApplicationDomainUrl($noindex_domain))
+        ->contains(ValidationPatterns::normalizeApplicationDomainUrl($domain));
+}
+
+function fqdnLabelsForCaddy(string $network, string $uuid, Collection $domains, bool $is_force_https_enabled = false, $onlyPort = null, ?Collection $serviceLabels = null, ?bool $is_gzip_enabled = true, ?bool $is_stripprefix_enabled = true, ?string $service_name = null, ?string $image = null, string $redirect_direction = 'both', ?string $predefinedPort = null, bool $is_http_basic_auth_enabled = false, ?string $http_basic_auth_username = null, ?string $http_basic_auth_password = null, ?Collection $noindex_domains = null)
 {
     $labels = collect([]);
     if ($serviceLabels) {
@@ -424,7 +470,14 @@ function fqdnLabelsForCaddy(string $network, string $uuid, Collection $domains, 
             $port = $predefinedPort;
         }
         $labels->push("caddy_{$loop}={$schema}://{$host}");
-        $labels->push("caddy_{$loop}.header=-Server");
+        if (isNoindexDomain($domain, $noindex_domains)) {
+            // Caddy's header directive takes either inline arguments or a block,
+            // never both, so -Server has to move into the block alongside it.
+            $labels->push("caddy_{$loop}.header.0_-Server=");
+            $labels->push("caddy_{$loop}.header.1_X-Robots-Tag=\"noindex, nofollow\"");
+        } else {
+            $labels->push("caddy_{$loop}.header=-Server");
+        }
         $labels->push("caddy_{$loop}.try_files={path} /index.html /index.php");
 
         if ($port) {
@@ -484,10 +537,14 @@ function shouldUsePublicCertResolverCacheKey(int $teamId): string
 
 function traefikCertResolverName(): string
 {
+    if (! app()->bound('config')) {
+        return 'letsencrypt';
+    }
+
     return config('constants.coolify.proxy.traefik.cert_resolver', 'letsencrypt');
 }
 
-function fqdnLabelsForTraefik(string $uuid, Collection $domains, bool $is_force_https_enabled = false, $onlyPort = null, ?Collection $serviceLabels = null, ?bool $is_gzip_enabled = true, ?bool $is_stripprefix_enabled = true, ?string $service_name = null, bool $generate_unique_uuid = false, ?string $image = null, string $redirect_direction = 'both', bool $is_http_basic_auth_enabled = false, ?string $http_basic_auth_username = null, ?string $http_basic_auth_password = null, bool $use_public_cert_resolver = true)
+function fqdnLabelsForTraefik(string $uuid, Collection $domains, bool $is_force_https_enabled = false, $onlyPort = null, ?Collection $serviceLabels = null, ?bool $is_gzip_enabled = true, ?bool $is_stripprefix_enabled = true, ?string $service_name = null, bool $generate_unique_uuid = false, ?string $image = null, string $redirect_direction = 'both', bool $is_http_basic_auth_enabled = false, ?string $http_basic_auth_username = null, ?string $http_basic_auth_password = null, ?Collection $noindex_domains = null, bool $use_public_cert_resolver = true)
 {
     $labels = collect([]);
     $labels->push('traefik.enable=true');
@@ -553,8 +610,10 @@ function fqdnLabelsForTraefik(string $uuid, Collection $domains, bool $is_force_
             $http_label = "http-{$loop}-{$uuid}";
             $https_label = "https-{$loop}-{$uuid}";
             if ($service_name) {
-                $http_label = "http-{$loop}-{$uuid}-{$service_name}";
-                $https_label = "https-{$loop}-{$uuid}-{$service_name}";
+                // Dots in service names split Traefik label paths; hash avoids api.test/api-test collisions.
+                $safeServiceName = traefikSafeServiceNameSegment($service_name);
+                $http_label = "http-{$loop}-{$uuid}-{$safeServiceName}";
+                $https_label = "https-{$loop}-{$uuid}-{$safeServiceName}";
             }
             if (str($image)->contains('ghost')) {
                 $labels->push("traefik.http.middlewares.redir-ghost-{$uuid}.redirectregex.regex=^{$path}/(.*)");
@@ -564,16 +623,22 @@ function fqdnLabelsForTraefik(string $uuid, Collection $domains, bool $is_force_
                 $labels->push("caddy_{$loop}.handle_path.{$loop}_redir-ghost-{$uuid}.rewrite.replacement=/$1");
             }
 
+            $noindex_name = "{$loop}-{$uuid}-noindex";
+            $is_noindex = isNoindexDomain($domain, $noindex_domains);
+            if ($is_noindex) {
+                $labels->push("traefik.http.middlewares.{$noindex_name}.headers.customresponseheaders.X-Robots-Tag=noindex, nofollow");
+            }
+
             $to_www_name = "{$loop}-{$uuid}-to-www";
             $to_non_www_name = "{$loop}-{$uuid}-to-non-www";
             $redirect_to_non_www = [
                 "traefik.http.middlewares.{$to_non_www_name}.redirectregex.regex=^(http|https)://www\.(.+)",
-                "traefik.http.middlewares.{$to_non_www_name}.redirectregex.replacement=\${1}://\${2}",
+                "traefik.http.middlewares.{$to_non_www_name}.redirectregex.replacement=\$\${1}://\$\${2}",
                 "traefik.http.middlewares.{$to_non_www_name}.redirectregex.permanent=false",
             ];
             $redirect_to_www = [
                 "traefik.http.middlewares.{$to_www_name}.redirectregex.regex=^(http|https)://(?:www\.)?(.+)",
-                "traefik.http.middlewares.{$to_www_name}.redirectregex.replacement=\${1}://www.\${2}",
+                "traefik.http.middlewares.{$to_www_name}.redirectregex.replacement=\$\${1}://www.\$\${2}",
                 "traefik.http.middlewares.{$to_www_name}.redirectregex.permanent=false",
             ];
             if ($schema === 'https') {
@@ -608,6 +673,9 @@ function fqdnLabelsForTraefik(string $uuid, Collection $domains, bool $is_force_
                     if ($is_http_basic_auth_enabled) {
                         $middlewares->push($http_basic_auth_label);
                     }
+                    if ($is_noindex) {
+                        $middlewares->push($noindex_name);
+                    }
                     $middlewares_from_labels->each(function ($middleware_name) use ($middlewares) {
                         $middlewares->push($middleware_name);
                     });
@@ -634,6 +702,9 @@ function fqdnLabelsForTraefik(string $uuid, Collection $domains, bool $is_force_
                     if ($is_http_basic_auth_enabled) {
                         $middlewares->push($http_basic_auth_label);
                     }
+                    if ($is_noindex) {
+                        $middlewares->push($noindex_name);
+                    }
                     $middlewares_from_labels->each(function ($middleware_name) use ($middlewares) {
                         $middlewares->push($middleware_name);
                     });
@@ -657,8 +728,15 @@ function fqdnLabelsForTraefik(string $uuid, Collection $domains, bool $is_force_
                     $labels->push("traefik.http.services.{$http_label}.loadbalancer.server.port=$port");
                     $labels->push("traefik.http.routers.{$http_label}.service={$http_label}");
                 }
+                $middlewares = collect([]);
+                if ($is_noindex) {
+                    $middlewares->push($noindex_name);
+                }
                 if ($is_force_https_enabled) {
-                    $labels->push("traefik.http.routers.{$http_label}.middlewares=redirect-to-https");
+                    $middlewares->push('redirect-to-https');
+                }
+                if ($middlewares->isNotEmpty()) {
+                    $labels->push("traefik.http.routers.{$http_label}.middlewares={$middlewares->join(',')}");
                 }
             } else {
                 // Set labels for http
@@ -691,6 +769,9 @@ function fqdnLabelsForTraefik(string $uuid, Collection $domains, bool $is_force_
                     if ($is_http_basic_auth_enabled) {
                         $middlewares->push($http_basic_auth_label);
                     }
+                    if ($is_noindex) {
+                        $middlewares->push($noindex_name);
+                    }
                     $middlewares_from_labels->each(function ($middleware_name) use ($middlewares) {
                         $middlewares->push($middleware_name);
                     });
@@ -716,6 +797,9 @@ function fqdnLabelsForTraefik(string $uuid, Collection $domains, bool $is_force_
                     }
                     if ($is_http_basic_auth_enabled) {
                         $middlewares->push($http_basic_auth_label);
+                    }
+                    if ($is_noindex) {
+                        $middlewares->push($noindex_name);
                     }
                     $middlewares_from_labels->each(function ($middleware_name) use ($middlewares) {
                         $middlewares->push($middleware_name);
@@ -752,6 +836,7 @@ function generateLabelsApplication(Application $application, ?ApplicationPreview
     if ($pull_request_id === 0) {
         if ($application->fqdn) {
             $domains = str(data_get($application, 'fqdn'))->explode(',');
+            $noindexDomains = $application->noindexDomains();
             $shouldGenerateLabelsExactly = $application->destination->server->settings->generate_exact_labels;
             if ($shouldGenerateLabelsExactly) {
                 switch ($application->destination->server->proxyType()) {
@@ -768,6 +853,7 @@ function generateLabelsApplication(Application $application, ?ApplicationPreview
                             http_basic_auth_username: $application->http_basic_auth_username,
                             http_basic_auth_password: $application->http_basic_auth_password,
                             use_public_cert_resolver: $usePublicCertResolver,
+                            noindex_domains: $noindexDomains,
                         ));
                         break;
                     case ProxyTypes::CADDY->value:
@@ -783,6 +869,7 @@ function generateLabelsApplication(Application $application, ?ApplicationPreview
                             is_http_basic_auth_enabled: $application->is_http_basic_auth_enabled,
                             http_basic_auth_username: $application->http_basic_auth_username,
                             http_basic_auth_password: $application->http_basic_auth_password,
+                            noindex_domains: $noindexDomains,
                         ));
                         break;
                 }
@@ -799,6 +886,7 @@ function generateLabelsApplication(Application $application, ?ApplicationPreview
                     http_basic_auth_username: $application->http_basic_auth_username,
                     http_basic_auth_password: $application->http_basic_auth_password,
                     use_public_cert_resolver: $usePublicCertResolver,
+                    noindex_domains: $noindexDomains,
                 ));
                 $labels = $labels->merge(fqdnLabelsForCaddy(
                     network: $application->destination->network,
@@ -812,6 +900,7 @@ function generateLabelsApplication(Application $application, ?ApplicationPreview
                     is_http_basic_auth_enabled: $application->is_http_basic_auth_enabled,
                     http_basic_auth_username: $application->http_basic_auth_username,
                     http_basic_auth_password: $application->http_basic_auth_password,
+                    noindex_domains: $noindexDomains,
                 ));
             }
         }
@@ -821,6 +910,8 @@ function generateLabelsApplication(Application $application, ?ApplicationPreview
         } else {
             $domains = collect([]);
         }
+        // Previews are ephemeral: every domain is noindex.
+        $noindexDomains = $domains;
         $shouldGenerateLabelsExactly = $application->destination->server->settings->generate_exact_labels;
         if ($shouldGenerateLabelsExactly) {
             switch ($application->destination->server->proxyType()) {
@@ -836,6 +927,7 @@ function generateLabelsApplication(Application $application, ?ApplicationPreview
                         http_basic_auth_username: $application->http_basic_auth_username,
                         http_basic_auth_password: $application->http_basic_auth_password,
                         use_public_cert_resolver: $usePublicCertResolver,
+                        noindex_domains: $noindexDomains,
                     ));
                     break;
                 case ProxyTypes::CADDY->value:
@@ -850,6 +942,7 @@ function generateLabelsApplication(Application $application, ?ApplicationPreview
                         is_http_basic_auth_enabled: $application->is_http_basic_auth_enabled,
                         http_basic_auth_username: $application->http_basic_auth_username,
                         http_basic_auth_password: $application->http_basic_auth_password,
+                        noindex_domains: $noindexDomains,
                     ));
                     break;
             }
@@ -865,6 +958,7 @@ function generateLabelsApplication(Application $application, ?ApplicationPreview
                 http_basic_auth_username: $application->http_basic_auth_username,
                 http_basic_auth_password: $application->http_basic_auth_password,
                 use_public_cert_resolver: $usePublicCertResolver,
+                noindex_domains: $noindexDomains,
             ));
             $labels = $labels->merge(fqdnLabelsForCaddy(
                 network: $application->destination->network,
@@ -877,6 +971,7 @@ function generateLabelsApplication(Application $application, ?ApplicationPreview
                 is_http_basic_auth_enabled: $application->is_http_basic_auth_enabled,
                 http_basic_auth_username: $application->http_basic_auth_username,
                 http_basic_auth_password: $application->http_basic_auth_password,
+                noindex_domains: $noindexDomains,
             ));
         }
     }

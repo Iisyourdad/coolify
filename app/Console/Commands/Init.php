@@ -24,7 +24,6 @@ use Carbon\Carbon;
 use Illuminate\Console\Command;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Artisan;
-use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
 
 class Init extends Command
@@ -330,10 +329,12 @@ class Init extends Command
 
     private function pullTemplatesFromCDN()
     {
-        $response = Http::retry(3, 1000)->get(config('constants.services.official'));
+        $response = Http::retry(3, 1000, throw: false)
+            ->timeout(60)
+            ->connectTimeout(10)
+            ->get(config('constants.services.official'));
         if ($response->successful()) {
-            $services = $response->json();
-            File::put(base_path('templates/'.config('constants.services.file_name')), json_encode($services));
+            store_service_templates_bundle($response->body());
         }
     }
 

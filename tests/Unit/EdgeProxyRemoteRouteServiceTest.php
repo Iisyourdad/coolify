@@ -93,6 +93,51 @@ it('serves both entrypoints without redirect when force https is disabled', func
         ->and(data_get($config, 'http.middlewares.edge-optional-https-uuid-redirect-to-https'))->toBeNull();
 });
 
+it('applies per-domain noindex and canonical host redirects to edge routes', function () {
+    $service = new EdgeProxyRemoteRouteService;
+
+    $config = $service->generateTraefikConfig('canonical-route-uuid', [
+        [
+            'scheme' => 'https',
+            'host' => 'example.com',
+            'path' => '/',
+            'upstream_url' => 'http://10.8.0.15:3000',
+            'noindex' => true,
+            'redirect_direction' => 'www',
+        ],
+        [
+            'scheme' => 'http',
+            'host' => 'www.legacy.example.com',
+            'path' => '/',
+            'upstream_url' => 'http://10.8.0.15:3000',
+            'redirect_direction' => 'non-www',
+        ],
+    ]);
+
+    expect(data_get($config, 'http.middlewares.edge-canonical-route-uuid-noindex-1.headers.customResponseHeaders.X-Robots-Tag'))
+        ->toBe('noindex, nofollow')
+        ->and(data_get($config, 'http.middlewares.edge-canonical-route-uuid-to-www-1.redirectRegex.regex'))
+        ->toBe('^(http|https)://(?:www\\.)?(.+)')
+        ->and(data_get($config, 'http.middlewares.edge-canonical-route-uuid-to-www-1.redirectRegex.replacement'))
+        ->toBe('${1}://www.${2}')
+        ->and(data_get($config, 'http.middlewares.edge-canonical-route-uuid-to-non-www-2.redirectRegex.regex'))
+        ->toBe('^(http|https)://www\\.(.+)')
+        ->and(data_get($config, 'http.middlewares.edge-canonical-route-uuid-to-non-www-2.redirectRegex.replacement'))
+        ->toBe('${1}://${2}')
+        ->and(data_get($config, 'http.routers.edge-canonical-route-uuid-http-1.middlewares'))
+        ->toBe([
+            'edge-canonical-route-uuid-noindex-1',
+            'edge-canonical-route-uuid-redirect-to-https',
+        ])
+        ->and(data_get($config, 'http.routers.edge-canonical-route-uuid-https-1.middlewares'))
+        ->toBe([
+            'edge-canonical-route-uuid-to-www-1',
+            'edge-canonical-route-uuid-noindex-1',
+        ])
+        ->and(data_get($config, 'http.routers.edge-canonical-route-uuid-http-2.middlewares'))
+        ->toBe(['edge-canonical-route-uuid-to-non-www-2']);
+});
+
 it('uses configured traefik entrypoints and cert resolver for remote routes', function () {
     $container = Container::getInstance();
     $hadOriginalConfig = $container->bound('config');
@@ -529,7 +574,9 @@ YAML;
 
     $application = new ServiceApplication;
     $application->name = 'app';
-    $application->fqdn = 'https://demo.example.com:3000';
+    $application->fqdn = 'https://demo.example.com:3000,https://www.demo.example.com:3000';
+    $application->noindex_domains = ['https://demo.example.com:3000'];
+    $application->redirect = 'www';
 
     $service->setRelation('applications', collect([$application]));
     $application->setRelation('service', $service);
@@ -550,7 +597,10 @@ YAML;
 
     preg_match("/echo '([^']+)' \\| base64 -d/", $manager->calls[0]['commands'][1], $firstPayloadMatches);
     $firstPayload = base64_decode($firstPayloadMatches[1]);
-    expect($firstPayload)->toContain('http://10.8.0.15:9010');
+    expect($firstPayload)->toContain('http://10.8.0.15:9010')
+        ->and($firstPayload)->toContain("X-Robots-Tag: 'noindex, nofollow'")
+        ->and($firstPayload)->toContain('redirectRegex:')
+        ->and($firstPayload)->toContain("replacement: '\${1}://www.\${2}'");
 
     $service->docker_compose_raw = <<<'YAML'
 services:
@@ -676,7 +726,9 @@ it('creates, updates, and deletes a stable edge route file per application uuid'
     $application = new Application;
     $application->uuid = 'application-test-uuid';
     $application->build_pack = 'nixpacks';
-    $application->fqdn = 'https://app.example.com:3000';
+    $application->fqdn = 'https://app.example.com:3000,https://www.app.example.com:3000';
+    $application->noindex_domains = ['https://app.example.com:3000'];
+    $application->redirect = 'www';
     $application->ports_mappings = '9010:3000';
 
     $warnings = $manager->syncApplicationWithServers($application, $edgeProxyServer, $deploymentServer);
@@ -695,7 +747,9 @@ it('creates, updates, and deletes a stable edge route file per application uuid'
 
     preg_match("/echo '([^']+)' \\| base64 -d/", $manager->calls[0]['commands'][1], $firstPayloadMatches);
     $firstPayload = base64_decode($firstPayloadMatches[1]);
-    expect($firstPayload)->toContain('http://10.8.0.30:9010');
+    expect($firstPayload)->toContain('http://10.8.0.30:9010')
+        ->and($firstPayload)->toContain("X-Robots-Tag: 'noindex, nofollow'")
+        ->and($firstPayload)->toContain("replacement: '\${1}://www.\${2}'");
 
     $application->ports_mappings = '9020:3000';
 
@@ -745,8 +799,12 @@ it('creates edge route for docker compose application domains using compose serv
     $application->uuid = 'application-compose-route';
     $application->build_pack = 'dockercompose';
     $application->docker_compose_domains = json_encode([
-        'web' => ['domain' => 'https://compose-app.example.com:3000'],
+        'web' => [
+            'domain' => 'https://compose-app.example.com:3000,https://www.compose-app.example.com:3000',
+            'redirect' => 'www',
+        ],
     ]);
+    $application->noindex_domains = ['https://compose-app.example.com:3000'];
     $application->docker_compose_raw = <<<'YAML'
 services:
   web:
@@ -763,7 +821,9 @@ YAML;
     $payload = base64_decode($payloadMatches[1]);
 
     expect($payload)->toContain('Host(`compose-app.example.com`)')
-        ->and($payload)->toContain('http://10.8.0.31:9030');
+        ->and($payload)->toContain('http://10.8.0.31:9030')
+        ->and($payload)->toContain("X-Robots-Tag: 'noindex, nofollow'")
+        ->and($payload)->toContain("replacement: '\${1}://www.\${2}'");
 });
 
 it('returns actionable warning and does not write route file when application published host port is missing', function () {

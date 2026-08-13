@@ -68,6 +68,39 @@ it('rejects enabling master domain routing on non-traefik servers', function () 
     expect($server->settings->fresh()->is_master_domain_router_enabled)->toBeFalse();
 });
 
+it('rejects enabling master domain routing on dedicated build servers', function () {
+    $user = User::factory()->create();
+    $team = $user->teams()->first();
+
+    $server = Server::factory()->create([
+        'team_id' => $team->id,
+        'proxy' => ['type' => ProxyTypes::TRAEFIK->value],
+    ]);
+    $server->settings->update(['is_build_server' => true]);
+
+    expect(fn () => $server->settings->update(['is_master_domain_router_enabled' => true]))
+        ->toThrow(RuntimeException::class, 'Master domain routing cannot be enabled on a dedicated build server.');
+
+    expect($server->settings->fresh()->is_master_domain_router_enabled)->toBeFalse();
+});
+
+it('rejects changing an enabled master domain router into a dedicated build server', function () {
+    $user = User::factory()->create();
+    $team = $user->teams()->first();
+
+    $server = Server::factory()->create([
+        'team_id' => $team->id,
+        'proxy' => ['type' => ProxyTypes::TRAEFIK->value],
+    ]);
+    $server->settings->update(['is_master_domain_router_enabled' => true]);
+
+    expect(fn () => $server->settings->update(['is_build_server' => true]))
+        ->toThrow(RuntimeException::class, 'Master domain routing cannot be enabled on a dedicated build server.');
+
+    expect($server->settings->fresh()->is_build_server)->toBeFalse()
+        ->and($server->settings->fresh()->is_master_domain_router_enabled)->toBeTrue();
+});
+
 it('rejects changing an enabled master domain router away from traefik', function () {
     $user = User::factory()->create();
     $team = $user->teams()->first();
@@ -108,4 +141,24 @@ it('locks master domain router toggle when another server in the same team is al
         ->assertSet('isMasterDomainRouterEnabled', false);
 
     expect($otherServer->settings->fresh()->is_master_domain_router_enabled)->toBeFalse();
+});
+
+it('locks master domain router toggle on dedicated build servers', function () {
+    $user = User::factory()->create();
+    $team = $user->teams()->first();
+    $this->actingAs($user);
+    refreshSession($team);
+
+    $server = Server::factory()->create([
+        'team_id' => $team->id,
+        'proxy' => ['type' => ProxyTypes::TRAEFIK->value],
+    ]);
+    $server->settings->update(['is_build_server' => true]);
+
+    Livewire::test(Show::class, ['server_uuid' => $server->uuid])
+        ->assertSet('isMasterDomainRouterLocked', true)
+        ->set('isMasterDomainRouterEnabled', true)
+        ->assertSet('isMasterDomainRouterEnabled', false);
+
+    expect($server->settings->fresh()->is_master_domain_router_enabled)->toBeFalse();
 });

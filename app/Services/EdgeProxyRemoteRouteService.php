@@ -177,6 +177,8 @@ class EdgeProxyRemoteRouteService
                     'scheme' => $url->getScheme(),
                     'host' => $url->getHost(),
                     'path' => $url->getPath(),
+                    'noindex' => $application->isDomainNoindexed($domain),
+                    'redirect_direction' => $application->redirect,
                     ...$upstream,
                 ];
             }
@@ -324,6 +326,7 @@ class EdgeProxyRemoteRouteService
         foreach ($domains as $domainData) {
             $domain = data_get($domainData, 'domain');
             $composeServiceName = data_get($domainData, 'service_name');
+            $redirectDirection = data_get($domainData, 'redirect_direction', $application->redirect);
 
             $unsupportedProtocol = $this->detectUnsupportedDomainProtocol($domain);
             if (! is_null($unsupportedProtocol)) {
@@ -394,6 +397,8 @@ class EdgeProxyRemoteRouteService
                 'force_https' => $this->applicationForcesHttps($application),
                 'host' => $url->getHost(),
                 'path' => $url->getPath(),
+                'noindex' => $application->isDomainNoindexed($domain),
+                'redirect_direction' => $redirectDirection,
                 ...$upstream,
             ];
         }
@@ -608,6 +613,56 @@ class EdgeProxyRemoteRouteService
 
             $scheme = strtolower((string) data_get($route, 'scheme', 'https'));
             $forceHttps = data_get($route, 'force_https', true) !== false;
+            $httpMiddlewares = [];
+            $httpsMiddlewares = [];
+
+            $noindexMiddlewareName = "edge-{$serviceKey}-noindex-{$suffix}";
+            if (data_get($route, 'noindex') === true) {
+                $config['http']['middlewares'][$noindexMiddlewareName] = [
+                    'headers' => [
+                        'customResponseHeaders' => [
+                            'X-Robots-Tag' => 'noindex, nofollow',
+                        ],
+                    ],
+                ];
+                $httpMiddlewares[] = $noindexMiddlewareName;
+            }
+
+            $redirectDirection = data_get($route, 'redirect_direction');
+            $hostStartsWithWww = Str::startsWith(strtolower((string) $route['host']), 'www.');
+            $canonicalRedirectMiddleware = null;
+            if ($redirectDirection === 'www' && ! $hostStartsWithWww) {
+                $canonicalRedirectMiddleware = "edge-{$serviceKey}-to-www-{$suffix}";
+                $config['http']['middlewares'][$canonicalRedirectMiddleware] = [
+                    'redirectRegex' => [
+                        'regex' => '^(http|https)://(?:www\\.)?(.+)',
+                        'replacement' => '${1}://www.${2}',
+                        'permanent' => false,
+                    ],
+                ];
+            } elseif ($redirectDirection === 'non-www' && $hostStartsWithWww) {
+                $canonicalRedirectMiddleware = "edge-{$serviceKey}-to-non-www-{$suffix}";
+                $config['http']['middlewares'][$canonicalRedirectMiddleware] = [
+                    'redirectRegex' => [
+                        'regex' => '^(http|https)://www\\.(.+)',
+                        'replacement' => '${1}://${2}',
+                        'permanent' => false,
+                    ],
+                ];
+            }
+
+            if (! is_null($canonicalRedirectMiddleware)) {
+                if ($scheme === 'https') {
+                    $httpsMiddlewares[] = $canonicalRedirectMiddleware;
+                } else {
+                    $httpMiddlewares[] = $canonicalRedirectMiddleware;
+                }
+            }
+
+            if (data_get($route, 'noindex') === true) {
+                $httpsMiddlewares[] = $noindexMiddlewareName;
+            }
+
             $httpRouter = [
                 'rule' => $rule,
                 'entryPoints' => [$this->httpEntryPointName()],
@@ -621,7 +676,7 @@ class EdgeProxyRemoteRouteService
                             'scheme' => 'https',
                         ],
                     ];
-                    $httpRouter['middlewares'] = [$redirectMiddlewareName];
+                    $httpMiddlewares[] = $redirectMiddlewareName;
                 }
 
                 $tls = [];
@@ -635,6 +690,13 @@ class EdgeProxyRemoteRouteService
                     'service' => $serviceName,
                     'tls' => $tls,
                 ];
+                if ($httpsMiddlewares !== []) {
+                    $config['http']['routers'][$httpsRouterName]['middlewares'] = $httpsMiddlewares;
+                }
+            }
+
+            if ($httpMiddlewares !== []) {
+                $httpRouter['middlewares'] = $httpMiddlewares;
             }
 
             $config['http']['routers'][$httpRouterName] = $httpRouter;
@@ -896,6 +958,9 @@ class EdgeProxyRemoteRouteService
                     return [
                         'service_name' => $serviceName,
                         'domain' => (string) $domain,
+                        'redirect_direction' => is_array($domainConfig)
+                            ? data_get($domainConfig, 'redirect')
+                            : null,
                     ];
                 })
                 ->flatMap(function (array $domainData) {
@@ -905,6 +970,7 @@ class EdgeProxyRemoteRouteService
                         ->map(fn (string $domain) => [
                             'service_name' => $domainData['service_name'],
                             'domain' => $domain,
+                            'redirect_direction' => $domainData['redirect_direction'],
                         ]);
                 })
                 ->values();
@@ -916,6 +982,7 @@ class EdgeProxyRemoteRouteService
             ->map(fn (string $domain) => [
                 'service_name' => null,
                 'domain' => $domain,
+                'redirect_direction' => $application->redirect,
             ])
             ->values();
     }

@@ -146,6 +146,7 @@ class StackForm extends Component
     {
         $this->dockerComposeRaw = $raw;
         $this->submit(notify: true);
+        $this->dispatch('compose-save-finished');
     }
 
     public function instantSave()
@@ -205,14 +206,20 @@ class StackForm extends Component
 
     public function regenerateMasterDomainRouting(): void
     {
-        $this->excludeFromMasterDomainRouting = false;
-        $this->service->exclude_from_master_domain_routing = false;
-        $this->service->save();
+        try {
+            $this->authorize('update', $this->service);
 
-        $this->syncMasterDomainRoutes();
+            $this->excludeFromMasterDomainRouting = false;
+            $this->service->exclude_from_master_domain_routing = false;
+            $this->service->save();
 
-        $this->dispatch('success', 'Master domain routing regenerated.');
-        $this->dispatch('configurationChanged');
+            $this->syncMasterDomainRoutes();
+
+            $this->dispatch('success', 'Master domain routing regenerated.');
+            $this->dispatch('configurationChanged');
+        } catch (\Throwable $e) {
+            handleError($e, $this);
+        }
     }
 
     private function syncMasterDomainRoutesIfExclusionChanged(bool $wasExcludedFromMasterDomainRouting): void

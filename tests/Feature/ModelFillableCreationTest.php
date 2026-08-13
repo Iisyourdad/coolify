@@ -331,7 +331,7 @@ it('creates ServerSetting with all fillable attributes', function () {
         'server_id' => $this->server->id,
         'is_swarm_manager' => false,
         'is_jump_server' => false,
-        'is_build_server' => true,
+        'is_build_server' => false,
         'is_reachable' => true,
         'is_usable' => true,
         'wildcard_domain' => '*.example.com',
@@ -376,7 +376,7 @@ it('creates ServerSetting with all fillable attributes', function () {
 
     expect($setting->exists)->toBeTrue();
     expect($setting->server_id)->toBe($this->server->id);
-    expect($setting->is_build_server)->toBeTrue();
+    expect($setting->is_build_server)->toBeFalse();
     expect($setting->wildcard_domain)->toBe('*.example.com');
     expect($setting->concurrent_builds)->toBe(4);
     expect($setting->sentinel_token)->toBe('sentinel-token-789');
