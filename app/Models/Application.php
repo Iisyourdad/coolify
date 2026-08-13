@@ -10,6 +10,7 @@ use App\Services\DeploymentConfiguration\ConfigurationDiffer;
 use App\Traits\ClearsGlobalSearchCache;
 use App\Traits\HasConfiguration;
 use App\Traits\HasMetrics;
+use App\Traits\HasNoindexDomains;
 use App\Traits\HasSafeStringAttribute;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -23,7 +24,6 @@ use RuntimeException;
 use Spatie\Activitylog\Models\Activity;
 use Spatie\Url\Url;
 use Symfony\Component\Yaml\Yaml;
-use Visus\Cuid2\Cuid2;
 
 #[OA\Schema(
     description: 'Application model',
@@ -35,6 +35,7 @@ use Visus\Cuid2\Cuid2;
         'uuid' => ['type' => 'string', 'description' => 'The application UUID.'],
         'name' => ['type' => 'string', 'description' => 'The application name.'],
         'fqdn' => ['type' => 'string', 'nullable' => true, 'description' => 'The application domains.'],
+        'noindex_domains' => ['type' => 'array', 'items' => ['type' => 'string'], 'nullable' => true, 'description' => 'The subset of the application domains served with an X-Robots-Tag: noindex, nofollow response header.'],
         'config_hash' => ['type' => 'string', 'description' => 'Configuration hash.'],
         'git_repository' => ['type' => 'string', 'description' => 'Git repository URL.'],
         'git_branch' => ['type' => 'string', 'description' => 'Git branch.'],
@@ -75,6 +76,7 @@ use Visus\Cuid2\Cuid2;
         'limits_cpu_shares' => ['type' => 'integer', 'description' => 'CPU shares.'],
         'status' => ['type' => 'string', 'description' => 'Application status.'],
         'preview_url_template' => ['type' => 'string',  'description' => 'Preview URL template.'],
+        'max_restart_count' => ['type' => 'integer', 'description' => 'Maximum container restart count before stopping.'],
         'destination_type' => ['type' => 'string', 'description' => 'Destination type.'],
         'destination_id' => ['type' => 'integer', 'description' => 'Destination identifier.'],
         'source_id' => ['type' => 'integer', 'nullable' => true, 'description' => 'Source identifier.'],
@@ -112,12 +114,13 @@ use Visus\Cuid2\Cuid2;
         'is_http_basic_auth_enabled' => ['type' => 'boolean', 'description' => 'HTTP Basic Authentication enabled.'],
         'http_basic_auth_username' => ['type' => 'string', 'nullable' => true, 'description' => 'Username for HTTP Basic Authentication'],
         'http_basic_auth_password' => ['type' => 'string', 'nullable' => true, 'description' => 'Password for HTTP Basic Authentication'],
+        new OA\Property(property: 'settings', ref: '#/components/schemas/ApplicationSetting'),
     ]
 )]
 
 class Application extends BaseModel
 {
-    use ClearsGlobalSearchCache, HasConfiguration, HasFactory, HasMetrics, HasSafeStringAttribute, SoftDeletes;
+    use ClearsGlobalSearchCache, HasConfiguration, HasFactory, HasMetrics, HasNoindexDomains, HasSafeStringAttribute, SoftDeletes;
 
     private static $parserVersion = '5';
 
@@ -125,6 +128,7 @@ class Application extends BaseModel
         'name',
         'description',
         'fqdn',
+        'noindex_domains',
         'git_repository',
         'git_branch',
         'git_commit_sha',
@@ -177,12 +181,10 @@ class Application extends BaseModel
         'manual_webhook_secret_bitbucket',
         'manual_webhook_secret_gitea',
         'docker_compose_location',
-        'docker_compose_pr_location',
         'docker_compose',
-        'docker_compose_pr',
         'docker_compose_raw',
-        'docker_compose_pr_raw',
         'docker_compose_domains',
+        'domain_dns_statuses',
         'docker_compose_custom_start_command',
         'docker_compose_custom_build_command',
         'swarm_replicas',
@@ -219,6 +221,25 @@ class Application extends BaseModel
 
     protected $appends = ['server_status'];
 
+    /**
+     * Sensitive fields hidden by default in serialized output (toArray/toJson).
+     * API controllers should call makeVisible([...]) for callers with the
+     * `read:sensitive` or `root` token ability. Internal serializers (deployment
+     * job, compose generation) must makeVisible explicitly before toArray().
+     */
+    protected $hidden = [
+        'http_basic_auth_password',
+        'manual_webhook_secret_github',
+        'manual_webhook_secret_gitlab',
+        'manual_webhook_secret_bitbucket',
+        'manual_webhook_secret_gitea',
+        'dockerfile',
+        'docker_compose',
+        'docker_compose_raw',
+        'custom_labels',
+        'domain_dns_statuses',
+    ];
+
     protected function casts(): array
     {
         return [
@@ -227,6 +248,8 @@ class Application extends BaseModel
             'manual_webhook_secret_gitlab' => 'encrypted',
             'manual_webhook_secret_bitbucket' => 'encrypted',
             'manual_webhook_secret_gitea' => 'encrypted',
+            'noindex_domains' => 'array',
+            'domain_dns_statuses' => 'array',
             'restart_count' => 'integer',
             'max_restart_count' => 'integer',
             'last_restart_at' => 'datetime',
@@ -254,6 +277,7 @@ class Application extends BaseModel
                     $application->fqdn = null;
                 }
                 $payload['fqdn'] = $application->fqdn;
+                $application->syncNoindexDomains();
             }
             if ($application->isDirty('install_command')) {
                 $payload['install_command'] = str($application->install_command)->trim();
@@ -1081,16 +1105,110 @@ class Application extends BaseModel
         return ApplicationDeploymentQueue::where('application_id', $this->id)->where('created_at', '>=', now()->subDays(7))->orderBy('created_at', 'desc')->get();
     }
 
-    public function deployments(int $skip = 0, int $take = 10, ?string $pullRequestId = null)
-    {
-        $deployments = ApplicationDeploymentQueue::where('application_id', $this->id)->orderBy('created_at', 'desc');
+    /**
+     * @param  array<int, string>  $filters
+     * @return array{count: int, deployments: Collection<int, ApplicationDeploymentQueue>}
+     */
+    public function deployments(
+        int $skip = 0,
+        int $take = 10,
+        ?string $pullRequestId = null,
+        ?string $search = null,
+        array $filters = [],
+        string $sort = 'newest',
+    ): array {
+        $deployments = ApplicationDeploymentQueue::query()
+            ->where('application_id', $this->id);
 
         if ($pullRequestId) {
-            $deployments = $deployments->where('pull_request_id', $pullRequestId);
+            $deployments->where('pull_request_id', $pullRequestId);
+        }
+
+        $search = trim((string) $search);
+        if ($search !== '') {
+            $normalizedSearch = Str::lower($search);
+            $statusAliases = [
+                'success' => ApplicationDeploymentStatus::FINISHED->value,
+                'in progress' => ApplicationDeploymentStatus::IN_PROGRESS->value,
+                'cancelled' => ApplicationDeploymentStatus::CANCELLED_BY_USER->value,
+            ];
+
+            $deployments->where(function ($query) use ($search, $normalizedSearch, $statusAliases) {
+                $query
+                    ->whereLike('deployment_uuid', "%{$search}%")
+                    ->orWhereLike('commit', "%{$search}%")
+                    ->orWhereLike('commit_message', "%{$search}%")
+                    ->orWhereLike('server_name', "%{$search}%")
+                    ->orWhereLike('status', "%{$search}%");
+
+                if (isset($statusAliases[$normalizedSearch])) {
+                    $query->orWhere('status', $statusAliases[$normalizedSearch]);
+                }
+
+                if (is_numeric($search) && (int) $search > 0) {
+                    $query->orWhere('pull_request_id', (int) $search);
+                }
+
+                match ($normalizedSearch) {
+                    'pull request', 'pull requests', 'pr' => $query->orWhere('pull_request_id', '>', 0),
+                    'webhook', 'webhooks' => $query->orWhere('is_webhook', true),
+                    'rollback', 'rollbacks' => $query->orWhere('rollback', true),
+                    'api' => $query->orWhere('is_api', true),
+                    'manual' => $query->orWhere(function ($sourceQuery) {
+                        $sourceQuery
+                            ->where('pull_request_id', '<=', 0)
+                            ->where('is_webhook', false)
+                            ->where('rollback', false)
+                            ->where('is_api', false);
+                    }),
+                    default => null,
+                };
+            });
+        }
+
+        $statusFilters = collect($filters)
+            ->filter(fn (string $filter) => Str::startsWith($filter, 'status:'))
+            ->map(fn (string $filter) => Str::after($filter, 'status:'));
+        if ($statusFilters->isNotEmpty()) {
+            $deployments->whereIn('status', $statusFilters);
+        }
+
+        $sourceFilters = collect($filters)
+            ->filter(fn (string $filter) => Str::startsWith($filter, 'source:'))
+            ->map(fn (string $filter) => Str::after($filter, 'source:'));
+        if ($sourceFilters->isNotEmpty()) {
+            $deployments->where(function ($query) use ($sourceFilters) {
+                foreach ($sourceFilters as $source) {
+                    $query->orWhere(function ($sourceQuery) use ($source) {
+                        match ($source) {
+                            'pull-request' => $sourceQuery->where('pull_request_id', '>', 0),
+                            'webhook' => $sourceQuery->where('pull_request_id', '<=', 0)->where('is_webhook', true),
+                            'rollback' => $sourceQuery->where('pull_request_id', '<=', 0)->where('is_webhook', false)->where('rollback', true),
+                            'api' => $sourceQuery->where('pull_request_id', '<=', 0)->where('is_webhook', false)->where('rollback', false)->where('is_api', true),
+                            'manual' => $sourceQuery->where('pull_request_id', '<=', 0)->where('is_webhook', false)->where('rollback', false)->where('is_api', false),
+                            default => $sourceQuery->where('id', -1),
+                        };
+                    });
+                }
+            });
+        }
+
+        $serverFilters = collect($filters)
+            ->filter(fn (string $filter) => Str::startsWith($filter, 'server:'))
+            ->map(fn (string $filter) => Str::after($filter, 'server:'))
+            ->filter(fn (string $serverId) => ctype_digit($serverId))
+            ->map(fn (string $serverId) => (int) $serverId);
+        if ($serverFilters->isNotEmpty()) {
+            $deployments->whereIn('server_id', $serverFilters);
         }
 
         $count = $deployments->count();
-        $deployments = $deployments->skip($skip)->take($take)->get();
+        $deployments = $deployments
+            ->orderBy('created_at', $sort === 'oldest' ? 'asc' : 'desc')
+            ->orderBy('id', $sort === 'oldest' ? 'asc' : 'desc')
+            ->skip($skip)
+            ->take($take)
+            ->get();
 
         return [
             'count' => $count,
@@ -1265,11 +1383,11 @@ class Application extends BaseModel
 
     private function legacyConfigurationHash(): string
     {
-        $newConfigHash = base64_encode($this->fqdn.$this->git_repository.$this->git_branch.$this->git_commit_sha.$this->build_pack.$this->static_image.$this->install_command.$this->build_command.$this->start_command.$this->ports_exposes.$this->ports_mappings.$this->custom_network_aliases.$this->base_directory.$this->publish_directory.$this->dockerfile.$this->dockerfile_location.$this->custom_labels.$this->custom_docker_run_options.$this->dockerfile_target_build.$this->redirect.$this->custom_nginx_configuration.$this->settings?->use_build_secrets.$this->settings?->inject_build_args_to_dockerfile.$this->settings?->include_source_commit_in_build);
+        $newConfigHash = base64_encode($this->fqdn.json_encode($this->noindexDomains()->all()).$this->git_repository.$this->git_branch.$this->git_commit_sha.$this->build_pack.$this->static_image.$this->install_command.$this->build_command.$this->start_command.$this->ports_exposes.$this->ports_mappings.$this->custom_network_aliases.$this->base_directory.$this->publish_directory.$this->dockerfile.$this->dockerfile_location.$this->custom_labels.$this->custom_docker_run_options.$this->dockerfile_target_build.$this->redirect.$this->custom_nginx_configuration.$this->settings?->use_build_secrets.$this->settings?->inject_build_args_to_dockerfile.$this->settings?->include_source_commit_in_build);
         if ($this->pull_request_id === 0 || $this->pull_request_id === null) {
-            $newConfigHash .= json_encode($this->environment_variables()->get(['value',  'is_multiline', 'is_literal', 'is_buildtime', 'is_runtime'])->sort());
+            $newConfigHash .= json_encode($this->environment_variables()->get(['value',  'is_multiline', 'is_literal', 'is_buildtime', 'is_runtime'])->makeVisible('value')->sort());
         } else {
-            $newConfigHash .= json_encode($this->environment_variables_preview()->get(['value', 'is_multiline', 'is_literal', 'is_buildtime', 'is_runtime'])->sort());
+            $newConfigHash .= json_encode($this->environment_variables_preview()->get(['value', 'is_multiline', 'is_literal', 'is_buildtime', 'is_runtime'])->makeVisible('value')->sort());
         }
 
         return md5($newConfigHash);
@@ -1339,7 +1457,7 @@ class Application extends BaseModel
     {
         try {
             ['commands' => $lsRemoteCommand] = $this->generateGitLsRemoteCommands(deployment_uuid: $deployment_uuid, exec_in_docker: false);
-            instant_remote_process([$lsRemoteCommand], $this->destination->server, true);
+            instant_remote_process([$this->gitCommandsAsShellCommand($lsRemoteCommand)], $this->destination->server, true);
 
             return [
                 'is_accessible' => true,
@@ -1363,11 +1481,11 @@ class Application extends BaseModel
 
         if ($this->deploymentType() === 'source') {
             $source_html_url = data_get($this, 'source.html_url');
-            $url = parse_url(filter_var($source_html_url, FILTER_SANITIZE_URL));
-            $source_html_url_host = $url['host'];
-            $source_html_url_scheme = $url['scheme'];
 
             if ($this->source->getMorphClass() == 'App\Models\GithubApp') {
+                $url = parse_url(filter_var($source_html_url, FILTER_SANITIZE_URL)) ?: [];
+                $source_html_url_host = $url['host'] ?? '';
+                $source_html_url_scheme = $url['scheme'] ?? '';
                 $escapedCustomRepository = escapeshellarg($customRepository);
                 if ($this->source->is_public) {
                     $escapedRepoUrl = escapeshellarg("{$this->source->html_url}/{$customRepository}");
@@ -1391,13 +1509,13 @@ class Application extends BaseModel
                 }
 
                 if ($exec_in_docker) {
-                    $commands->push(executeInDocker($deployment_uuid, $base_command));
+                    $commands->push($this->gitCommand(executeInDocker($deployment_uuid, $base_command)));
                 } else {
-                    $commands->push($base_command);
+                    $commands->push($this->gitCommand($base_command));
                 }
 
                 return [
-                    'commands' => $commands->implode(' && '),
+                    'commands' => $this->gitCommandsAsShellCommand($commands),
                     'branch' => $branch,
                     'fullRepoUrl' => $fullRepoUrl,
                 ];
@@ -1405,29 +1523,18 @@ class Application extends BaseModel
 
             if ($this->source->getMorphClass() === GitlabApp::class) {
                 $gitlabSource = $this->source;
-                $private_key = data_get($gitlabSource, 'privateKey.private_key');
 
-                if ($private_key) {
-                    $fullRepoUrl = $customRepository;
-                    $private_key = base64_encode($private_key);
-                    $gitlabPort = $gitlabSource->custom_port ?? 22;
-                    $escapedCustomRepository = str_replace("'", "'\\''", $customRepository);
-                    $base_command = "GIT_SSH_COMMAND=\"ssh -o ConnectTimeout=30 -p {$gitlabPort} -o Port={$gitlabPort} -o LogLevel=ERROR -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i {$customSshKeyLocation} -o IdentitiesOnly=yes\" {$base_command} '{$escapedCustomRepository}'";
-
-                    if ($exec_in_docker) {
-                        $commands = collect([
-                            executeInDocker($deployment_uuid, 'mkdir -p /root/.ssh'),
-                            executeInDocker($deployment_uuid, "echo '{$private_key}' | base64 -d | tee {$customSshKeyLocation} > /dev/null"),
-                            executeInDocker($deployment_uuid, "chmod 600 {$customSshKeyLocation}"),
-                        ]);
-                    } else {
-                        $commands = collect([
-                            "trap 'rm -f {$customSshKeyLocation}' EXIT",
-                            'mkdir -p /root/.ssh',
-                            "echo '{$private_key}' | base64 -d | tee {$customSshKeyLocation} > /dev/null",
-                            "chmod 600 {$customSshKeyLocation}",
-                        ]);
-                    }
+                if ($gitlabSource->isConnected()) {
+                    $url = parse_url(filter_var($source_html_url, FILTER_SANITIZE_URL)) ?: [];
+                    $source_html_url_host = $this->urlHostWithPort($url);
+                    $source_html_url_scheme = $url['scheme'] ?? '';
+                    $token = generateGitlabCloneToken($gitlabSource);
+                    $encodedToken = rawurlencode($token);
+                    $pathPrefix = rtrim($url['path'] ?? '', '/');
+                    $repoUrl = "{$source_html_url_scheme}://oauth2:{$encodedToken}@{$source_html_url_host}{$pathPrefix}/{$customRepository}.git";
+                    $escapedRepoUrl = escapeshellarg($repoUrl);
+                    $fullRepoUrl = $repoUrl;
+                    $base_command = "{$base_command} {$escapedRepoUrl}";
 
                     if ($exec_in_docker) {
                         $commands->push(executeInDocker($deployment_uuid, $base_command));
@@ -1442,19 +1549,42 @@ class Application extends BaseModel
                     ];
                 }
 
-                // GitLab source without private key — use URL as-is (supports user-embedded basic auth)
+                $private_key = data_get($gitlabSource, 'privateKey.private_key');
+
+                if ($private_key) {
+                    $fullRepoUrl = $customRepository;
+                    $private_key = base64_encode($private_key);
+                    $gitlabPort = $gitlabSource->custom_port ?? 22;
+                    $escapedCustomRepository = str_replace("'", "'\\''", $customRepository);
+                    $base_command = "GIT_SSH_COMMAND=\"ssh -o ConnectTimeout=30 -p {$gitlabPort} -o Port={$gitlabPort} -o LogLevel=ERROR -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i {$customSshKeyLocation} -o IdentitiesOnly=yes\" {$base_command} '{$escapedCustomRepository}'";
+
+                    $commands = $this->gitSshKeySetupCommands($deployment_uuid, $private_key, $exec_in_docker);
+
+                    if ($exec_in_docker) {
+                        $commands->push($this->gitCommand(executeInDocker($deployment_uuid, $base_command)));
+                    } else {
+                        $commands->push($this->gitCommand($base_command));
+                    }
+
+                    return [
+                        'commands' => $commands,
+                        'branch' => $branch,
+                        'fullRepoUrl' => $fullRepoUrl,
+                    ];
+                }
+
                 $fullRepoUrl = $customRepository;
                 $escapedCustomRepository = escapeshellarg($customRepository);
                 $base_command = "{$base_command} {$escapedCustomRepository}";
 
                 if ($exec_in_docker) {
-                    $commands->push(executeInDocker($deployment_uuid, $base_command));
+                    $commands->push($this->gitCommand(executeInDocker($deployment_uuid, $base_command)));
                 } else {
-                    $commands->push($base_command);
+                    $commands->push($this->gitCommand($base_command));
                 }
 
                 return [
-                    'commands' => $commands->implode(' && '),
+                    'commands' => $this->gitCommandsAsShellCommand($commands),
                     'branch' => $branch,
                     'fullRepoUrl' => $fullRepoUrl,
                 ];
@@ -1473,29 +1603,16 @@ class Application extends BaseModel
             $escapedCustomRepository = str_replace("'", "'\\''", $customRepository);
             $base_command = "GIT_SSH_COMMAND=\"ssh -o ConnectTimeout=30 -p {$customPort} -o Port={$customPort} -o LogLevel=ERROR -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i {$customSshKeyLocation} -o IdentitiesOnly=yes\" {$base_command} '{$escapedCustomRepository}'";
 
-            if ($exec_in_docker) {
-                $commands = collect([
-                    executeInDocker($deployment_uuid, 'mkdir -p /root/.ssh'),
-                    executeInDocker($deployment_uuid, "echo '{$private_key}' | base64 -d | tee {$customSshKeyLocation} > /dev/null"),
-                    executeInDocker($deployment_uuid, "chmod 600 {$customSshKeyLocation}"),
-                ]);
-            } else {
-                $commands = collect([
-                    "trap 'rm -f {$customSshKeyLocation}' EXIT",
-                    'mkdir -p /root/.ssh',
-                    "echo '{$private_key}' | base64 -d | tee {$customSshKeyLocation} > /dev/null",
-                    "chmod 600 {$customSshKeyLocation}",
-                ]);
-            }
+            $commands = $this->gitSshKeySetupCommands($deployment_uuid, $private_key, $exec_in_docker);
 
             if ($exec_in_docker) {
-                $commands->push(executeInDocker($deployment_uuid, $base_command));
+                $commands->push($this->gitCommand(executeInDocker($deployment_uuid, $base_command)));
             } else {
-                $commands->push($base_command);
+                $commands->push($this->gitCommand($base_command));
             }
 
             return [
-                'commands' => $commands->implode(' && '),
+                'commands' => $commands,
                 'branch' => $branch,
                 'fullRepoUrl' => $fullRepoUrl,
             ];
@@ -1507,17 +1624,58 @@ class Application extends BaseModel
             $base_command = "{$base_command} {$escapedCustomRepository}";
 
             if ($exec_in_docker) {
-                $commands->push(executeInDocker($deployment_uuid, $base_command));
+                $commands->push($this->gitCommand(executeInDocker($deployment_uuid, $base_command)));
             } else {
-                $commands->push($base_command);
+                $commands->push($this->gitCommand($base_command));
             }
 
             return [
-                'commands' => $commands->implode(' && '),
+                'commands' => $this->gitCommandsAsShellCommand($commands),
                 'branch' => $branch,
                 'fullRepoUrl' => $fullRepoUrl,
             ];
         }
+    }
+
+    private function gitCommand(string $command): array
+    {
+        return [
+            'command' => $command,
+            'hidden' => true,
+        ];
+    }
+
+    private function gitCommandsAsShellCommand(Collection|array|string $commands): string
+    {
+        if (is_string($commands)) {
+            return $commands;
+        }
+
+        return collect($commands)
+            ->map(fn ($command) => data_get($command, 'command') ?? $command[0] ?? $command)
+            ->implode(' && ');
+    }
+
+    private function gitSshKeySetupCommands(string $deploymentUuid, string $privateKey, bool $execInDocker): Collection
+    {
+        $customSshKeyLocation = "/root/.ssh/id_rsa_coolify_{$deploymentUuid}";
+        $commands = collect([]);
+
+        if (! $execInDocker) {
+            $commands->push($this->gitCommand("trap 'rm -f {$customSshKeyLocation}' EXIT"));
+        }
+
+        $commands->push($this->gitCommand($execInDocker ? executeInDocker($deploymentUuid, 'mkdir -p /root/.ssh') : 'mkdir -p /root/.ssh'));
+        $commands->push([
+            'command' => $execInDocker
+                ? executeInDocker($deploymentUuid, "echo '{$privateKey}' | base64 -d | tee {$customSshKeyLocation} > /dev/null")
+                : "echo '{$privateKey}' | base64 -d | tee {$customSshKeyLocation} > /dev/null",
+            'hidden' => true,
+            'skip_command_log' => true,
+        ]);
+        $commands->push($this->gitCommand($execInDocker ? executeInDocker($deploymentUuid, "chmod 600 {$customSshKeyLocation}") : "chmod 600 {$customSshKeyLocation}"));
+
+        return $commands;
     }
 
     private function withGitHttpTransportConfig(?string $gitConfigOptions = null): string
@@ -1591,9 +1749,9 @@ class Application extends BaseModel
                         $git_clone_command = $this->setGitImportSettings($deployment_uuid, $git_clone_command, public: true, commit: $commit, gitConfigOptions: $gitConfigOptions);
                     }
                     if ($exec_in_docker) {
-                        $commands->push(executeInDocker($deployment_uuid, $git_clone_command));
+                        $commands->push($this->gitCommand(executeInDocker($deployment_uuid, $git_clone_command)));
                     } else {
-                        $commands->push($git_clone_command);
+                        $commands->push($this->gitCommand($git_clone_command));
                     }
                 } else {
                     $github_access_token = generateGithubInstallationToken($this->source);
@@ -1620,9 +1778,9 @@ class Application extends BaseModel
                         $git_clone_command = $this->setGitImportSettings($deployment_uuid, $git_clone_command, public: false, commit: $commit, gitConfigOptions: $gitConfigOptions);
                     }
                     if ($exec_in_docker) {
-                        $commands->push(executeInDocker($deployment_uuid, $git_clone_command));
+                        $commands->push($this->gitCommand(executeInDocker($deployment_uuid, $git_clone_command)));
                     } else {
-                        $commands->push($git_clone_command);
+                        $commands->push($this->gitCommand($git_clone_command));
                     }
                 }
                 if ($pull_request_id !== 0) {
@@ -1632,14 +1790,14 @@ class Application extends BaseModel
                     $gitCommand = isset($gitConfigOptions) ? "git {$gitConfigOptions}" : 'git';
                     $escapedPrBranch = escapeshellarg($branch);
                     if ($exec_in_docker) {
-                        $commands->push(executeInDocker($deployment_uuid, "cd {$escapedBaseDir} && {$gitCommand} fetch origin {$escapedPrBranch} && $git_checkout_command"));
+                        $commands->push($this->gitCommand(executeInDocker($deployment_uuid, "cd {$escapedBaseDir} && {$gitCommand} fetch origin {$escapedPrBranch} && $git_checkout_command")));
                     } else {
-                        $commands->push("cd {$escapedBaseDir} && {$gitCommand} fetch origin {$escapedPrBranch} && $git_checkout_command");
+                        $commands->push($this->gitCommand("cd {$escapedBaseDir} && {$gitCommand} fetch origin {$escapedPrBranch} && $git_checkout_command"));
                     }
                 }
 
                 return [
-                    'commands' => $commands->implode(' && '),
+                    'commands' => $this->gitCommandsAsShellCommand($commands),
                     'branch' => $branch,
                     'fullRepoUrl' => $fullRepoUrl,
                 ];
@@ -1647,44 +1805,37 @@ class Application extends BaseModel
 
             if ($this->source->getMorphClass() === GitlabApp::class) {
                 $gitlabSource = $this->source;
-                $private_key = data_get($gitlabSource, 'privateKey.private_key');
 
-                if ($private_key) {
-                    $fullRepoUrl = $customRepository;
-                    $private_key = base64_encode($private_key);
-                    $gitlabPort = $gitlabSource->custom_port ?? 22;
-                    $escapedCustomRepository = escapeshellarg($customRepository);
-                    $gitlabSshCommand = "ssh -o ConnectTimeout=30 -p {$gitlabPort} -o Port={$gitlabPort} -o LogLevel=ERROR -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i {$customSshKeyLocation} -o IdentitiesOnly=yes";
-                    $gitlabGitSshCommand = "GIT_SSH_COMMAND=\"{$gitlabSshCommand}\"";
-                    $git_clone_command_base = "{$gitlabGitSshCommand} {$git_clone_command} {$escapedCustomRepository} {$escapedBaseDir}";
+                if ($gitlabSource->isConnected()) {
+                    $token = generateGitlabCloneToken($gitlabSource);
+                    $encodedToken = rawurlencode($token);
+                    $pathPrefix = rtrim($url['path'] ?? '', '/');
+                    $source_html_url_host = $this->urlHostWithPort($url ?: []);
+
+                    // Rewrite same-host HTTPS submodule URLs to auth with the OAuth token (mirrors the GitHub path) without persisting credentials.
+                    $gitConfigOption = '-c '.escapeshellarg("url.{$source_html_url_scheme}://oauth2:{$encodedToken}@{$source_html_url_host}{$pathPrefix}/.insteadOf={$source_html_url_scheme}://{$source_html_url_host}{$pathPrefix}/");
+                    $gitConfigOptions = $this->withGitHttpTransportConfig($gitConfigOption);
+
+                    $repoUrl = "{$source_html_url_scheme}://oauth2:{$encodedToken}@{$source_html_url_host}{$pathPrefix}/{$customRepository}.git";
+                    $escapedRepoUrl = escapeshellarg($repoUrl);
+                    $fullRepoUrl = $repoUrl;
+                    $git_clone_command_base = $this->applyGitConfigOptionsToCloneCommand("{$git_clone_command} {$escapedRepoUrl} {$escapedBaseDir}", $gitConfigOptions);
                     if ($only_checkout) {
                         $git_clone_command = $git_clone_command_base;
                     } else {
-                        $git_clone_command = $this->setGitImportSettings($deployment_uuid, $git_clone_command_base, commit: $commit, gitSshCommand: $gitlabSshCommand);
-                    }
-                    if ($exec_in_docker) {
-                        $commands = collect([
-                            executeInDocker($deployment_uuid, 'mkdir -p /root/.ssh'),
-                            executeInDocker($deployment_uuid, "echo '{$private_key}' | base64 -d | tee {$customSshKeyLocation} > /dev/null"),
-                            executeInDocker($deployment_uuid, "chmod 600 {$customSshKeyLocation}"),
-                        ]);
-                    } else {
-                        $commands = collect([
-                            "trap 'rm -f {$customSshKeyLocation}' EXIT",
-                            'mkdir -p /root/.ssh',
-                            "echo '{$private_key}' | base64 -d | tee {$customSshKeyLocation} > /dev/null",
-                            "chmod 600 {$customSshKeyLocation}",
-                        ]);
+                        $git_clone_command = $this->setGitImportSettings($deployment_uuid, $git_clone_command_base, commit: $commit, gitConfigOptions: $gitConfigOptions);
                     }
 
                     if ($pull_request_id !== 0) {
-                        $branch = "merge-requests/{$pull_request_id}/head:$pr_branch_name";
+                        $branch = "merge-requests/{$pull_request_id}/head:{$pr_branch_name}";
                         if ($exec_in_docker) {
-                            $commands->push(executeInDocker($deployment_uuid, "echo 'Checking out $branch'"));
+                            $commands->push(executeInDocker($deployment_uuid, "echo 'Checking out {$branch}'"));
                         } else {
-                            $commands->push("echo 'Checking out $branch'");
+                            $commands->push("echo 'Checking out {$branch}'");
                         }
-                        $git_clone_command = "{$git_clone_command} && cd {$escapedBaseDir} && {$gitlabGitSshCommand} git fetch origin $branch && ".$this->buildGitCheckoutCommand($pr_branch_name, $gitlabSshCommand);
+                        $git_checkout_command = $this->buildGitCheckoutCommand($pr_branch_name, gitConfigOptions: $gitConfigOptions);
+                        $escapedPrBranch = escapeshellarg($branch);
+                        $git_clone_command = "{$git_clone_command} && cd {$escapedBaseDir} && git {$gitConfigOptions} fetch origin {$escapedPrBranch} && {$git_checkout_command}";
                     }
 
                     if ($exec_in_docker) {
@@ -1700,7 +1851,46 @@ class Application extends BaseModel
                     ];
                 }
 
-                // GitLab source without private key — use URL as-is (supports user-embedded basic auth)
+                $private_key = data_get($gitlabSource, 'privateKey.private_key');
+
+                if ($private_key) {
+                    $fullRepoUrl = $customRepository;
+                    $private_key = base64_encode($private_key);
+                    $gitlabPort = $gitlabSource->custom_port ?? 22;
+                    $escapedCustomRepository = escapeshellarg($customRepository);
+                    $gitlabSshCommand = "ssh -o ConnectTimeout=30 -p {$gitlabPort} -o Port={$gitlabPort} -o LogLevel=ERROR -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i {$customSshKeyLocation} -o IdentitiesOnly=yes";
+                    $gitlabGitSshCommand = "GIT_SSH_COMMAND=\"{$gitlabSshCommand}\"";
+                    $git_clone_command_base = "{$gitlabGitSshCommand} {$git_clone_command} {$escapedCustomRepository} {$escapedBaseDir}";
+                    if ($only_checkout) {
+                        $git_clone_command = $git_clone_command_base;
+                    } else {
+                        $git_clone_command = $this->setGitImportSettings($deployment_uuid, $git_clone_command_base, commit: $commit, gitSshCommand: $gitlabSshCommand);
+                    }
+                    $commands = $this->gitSshKeySetupCommands($deployment_uuid, $private_key, $exec_in_docker);
+
+                    if ($pull_request_id !== 0) {
+                        $branch = "merge-requests/{$pull_request_id}/head:$pr_branch_name";
+                        if ($exec_in_docker) {
+                            $commands->push($this->gitCommand(executeInDocker($deployment_uuid, "echo 'Checking out $branch'")));
+                        } else {
+                            $commands->push($this->gitCommand("echo 'Checking out $branch'"));
+                        }
+                        $git_clone_command = "{$git_clone_command} && cd {$escapedBaseDir} && {$gitlabGitSshCommand} git fetch origin $branch && ".$this->buildGitCheckoutCommand($pr_branch_name, $gitlabSshCommand);
+                    }
+
+                    if ($exec_in_docker) {
+                        $commands->push($this->gitCommand(executeInDocker($deployment_uuid, $git_clone_command)));
+                    } else {
+                        $commands->push($this->gitCommand($git_clone_command));
+                    }
+
+                    return [
+                        'commands' => $commands,
+                        'branch' => $branch,
+                        'fullRepoUrl' => $fullRepoUrl,
+                    ];
+                }
+
                 $fullRepoUrl = $customRepository;
                 $escapedCustomRepository = escapeshellarg($customRepository);
                 $git_clone_command = "{$git_clone_command} {$escapedCustomRepository} {$escapedBaseDir}";
@@ -1711,13 +1901,13 @@ class Application extends BaseModel
                 $git_clone_command = $this->setGitImportSettings($deployment_uuid, $git_clone_command, public: true, commit: $commit, gitConfigOptions: $gitConfigOptions);
 
                 if ($exec_in_docker) {
-                    $commands->push(executeInDocker($deployment_uuid, $git_clone_command));
+                    $commands->push($this->gitCommand(executeInDocker($deployment_uuid, $git_clone_command)));
                 } else {
-                    $commands->push($git_clone_command);
+                    $commands->push($this->gitCommand($git_clone_command));
                 }
 
                 return [
-                    'commands' => $commands->implode(' && '),
+                    'commands' => $this->gitCommandsAsShellCommand($commands),
                     'branch' => $branch,
                     'fullRepoUrl' => $fullRepoUrl,
                 ];
@@ -1739,55 +1929,42 @@ class Application extends BaseModel
             } else {
                 $git_clone_command = $this->setGitImportSettings($deployment_uuid, $git_clone_command_base, commit: $commit, gitSshCommand: $deployKeySshCommand);
             }
-            if ($exec_in_docker) {
-                $commands = collect([
-                    executeInDocker($deployment_uuid, 'mkdir -p /root/.ssh'),
-                    executeInDocker($deployment_uuid, "echo '{$private_key}' | base64 -d | tee {$customSshKeyLocation} > /dev/null"),
-                    executeInDocker($deployment_uuid, "chmod 600 {$customSshKeyLocation}"),
-                ]);
-            } else {
-                $commands = collect([
-                    "trap 'rm -f {$customSshKeyLocation}' EXIT",
-                    'mkdir -p /root/.ssh',
-                    "echo '{$private_key}' | base64 -d | tee {$customSshKeyLocation} > /dev/null",
-                    "chmod 600 {$customSshKeyLocation}",
-                ]);
-            }
+            $commands = $this->gitSshKeySetupCommands($deployment_uuid, $private_key, $exec_in_docker);
             if ($pull_request_id !== 0) {
                 if ($git_type === 'gitlab') {
                     $branch = "merge-requests/{$pull_request_id}/head:$pr_branch_name";
                     if ($exec_in_docker) {
-                        $commands->push(executeInDocker($deployment_uuid, "echo 'Checking out $branch'"));
+                        $commands->push($this->gitCommand(executeInDocker($deployment_uuid, "echo 'Checking out $branch'")));
                     } else {
-                        $commands->push("echo 'Checking out $branch'");
+                        $commands->push($this->gitCommand("echo 'Checking out $branch'"));
                     }
                     $git_clone_command = "{$git_clone_command} && cd {$escapedBaseDir} && {$deployKeyGitSshCommand} git fetch origin $branch && ".$this->buildGitCheckoutCommand($pr_branch_name, $deployKeySshCommand);
                 } elseif ($git_type === 'github' || $git_type === 'gitea') {
                     $branch = "pull/{$pull_request_id}/head:$pr_branch_name";
                     if ($exec_in_docker) {
-                        $commands->push(executeInDocker($deployment_uuid, "echo 'Checking out $branch'"));
+                        $commands->push($this->gitCommand(executeInDocker($deployment_uuid, "echo 'Checking out $branch'")));
                     } else {
-                        $commands->push("echo 'Checking out $branch'");
+                        $commands->push($this->gitCommand("echo 'Checking out $branch'"));
                     }
                     $git_clone_command = "{$git_clone_command} && cd {$escapedBaseDir} && {$deployKeyGitSshCommand} git fetch origin $branch && ".$this->buildGitCheckoutCommand($pr_branch_name, $deployKeySshCommand);
                 } elseif ($git_type === 'bitbucket') {
                     if ($exec_in_docker) {
-                        $commands->push(executeInDocker($deployment_uuid, "echo 'Checking out $branch'"));
+                        $commands->push($this->gitCommand(executeInDocker($deployment_uuid, "echo 'Checking out $branch'")));
                     } else {
-                        $commands->push("echo 'Checking out $branch'");
+                        $commands->push($this->gitCommand("echo 'Checking out $branch'"));
                     }
                     $git_clone_command = "{$git_clone_command} && cd {$escapedBaseDir} && {$deployKeyGitSshCommand} ".$this->buildGitCheckoutCommand($commit, $deployKeySshCommand);
                 }
             }
 
             if ($exec_in_docker) {
-                $commands->push(executeInDocker($deployment_uuid, $git_clone_command));
+                $commands->push($this->gitCommand(executeInDocker($deployment_uuid, $git_clone_command)));
             } else {
-                $commands->push($git_clone_command);
+                $commands->push($this->gitCommand($git_clone_command));
             }
 
             return [
-                'commands' => $commands->implode(' && '),
+                'commands' => $commands,
                 'branch' => $branch,
                 'fullRepoUrl' => $fullRepoUrl,
             ];
@@ -1808,37 +1985,37 @@ class Application extends BaseModel
                 if ($git_type === 'gitlab') {
                     $branch = "merge-requests/{$pull_request_id}/head:$pr_branch_name";
                     if ($exec_in_docker) {
-                        $commands->push(executeInDocker($deployment_uuid, "echo 'Checking out $branch'"));
+                        $commands->push($this->gitCommand(executeInDocker($deployment_uuid, "echo 'Checking out $branch'")));
                     } else {
-                        $commands->push("echo 'Checking out $branch'");
+                        $commands->push($this->gitCommand("echo 'Checking out $branch'"));
                     }
                     $git_clone_command = "{$git_clone_command} && cd {$escapedBaseDir} && GIT_SSH_COMMAND=\"{$otherSshCommand}\" {$gitCommand} fetch origin $branch && ".$this->buildGitCheckoutCommand($pr_branch_name, $otherSshCommand, $gitConfigOptions);
                 } elseif ($git_type === 'github' || $git_type === 'gitea') {
                     $branch = "pull/{$pull_request_id}/head:$pr_branch_name";
                     if ($exec_in_docker) {
-                        $commands->push(executeInDocker($deployment_uuid, "echo 'Checking out $branch'"));
+                        $commands->push($this->gitCommand(executeInDocker($deployment_uuid, "echo 'Checking out $branch'")));
                     } else {
-                        $commands->push("echo 'Checking out $branch'");
+                        $commands->push($this->gitCommand("echo 'Checking out $branch'"));
                     }
                     $git_clone_command = "{$git_clone_command} && cd {$escapedBaseDir} && GIT_SSH_COMMAND=\"{$otherSshCommand}\" {$gitCommand} fetch origin $branch && ".$this->buildGitCheckoutCommand($pr_branch_name, $otherSshCommand, $gitConfigOptions);
                 } elseif ($git_type === 'bitbucket') {
                     if ($exec_in_docker) {
-                        $commands->push(executeInDocker($deployment_uuid, "echo 'Checking out $branch'"));
+                        $commands->push($this->gitCommand(executeInDocker($deployment_uuid, "echo 'Checking out $branch'")));
                     } else {
-                        $commands->push("echo 'Checking out $branch'");
+                        $commands->push($this->gitCommand("echo 'Checking out $branch'"));
                     }
                     $git_clone_command = "{$git_clone_command} && cd {$escapedBaseDir} && GIT_SSH_COMMAND=\"{$otherSshCommand}\" ".$this->buildGitCheckoutCommand($commit, $otherSshCommand, $gitConfigOptions);
                 }
             }
 
             if ($exec_in_docker) {
-                $commands->push(executeInDocker($deployment_uuid, $git_clone_command));
+                $commands->push($this->gitCommand(executeInDocker($deployment_uuid, $git_clone_command)));
             } else {
-                $commands->push($git_clone_command);
+                $commands->push($this->gitCommand($git_clone_command));
             }
 
             return [
-                'commands' => $commands->implode(' && '),
+                'commands' => $this->gitCommandsAsShellCommand($commands),
                 'branch' => $branch,
                 'fullRepoUrl' => $fullRepoUrl,
             ];
@@ -1925,8 +2102,9 @@ class Application extends BaseModel
         if ($isInit && $this->docker_compose_raw) {
             return;
         }
-        $uuid = new Cuid2;
+        $uuid = new_public_id();
         ['commands' => $cloneCommand] = $this->generateGitImportCommands(deployment_uuid: $uuid, only_checkout: true, exec_in_docker: false, custom_base_dir: 'checkout');
+        $cloneCommand = $this->gitCommandsAsShellCommand($cloneCommand);
         $cloneCommand = str_replace(' clone ', ' clone --quiet ', $cloneCommand);
         $workdir = rtrim($this->base_directory, '/');
         $composeFile = $this->docker_compose_location;
@@ -2006,34 +2184,7 @@ class Application extends BaseModel
             $this->save();
             $parsedServices = $this->parse();
             if ($this->docker_compose_domains) {
-                $decoded = json_decode($this->docker_compose_domains, true);
-                $json = collect(is_array($decoded) ? $decoded : []);
-                $normalized = collect();
-                foreach ($json as $key => $value) {
-                    $normalizedKey = (string) str($key)->replace('-', '_')->replace('.', '_');
-                    $normalized->put($normalizedKey, $value);
-                }
-                $json = $normalized;
-                $services = collect(data_get($parsedServices, 'services', []));
-                foreach ($services as $name => $service) {
-                    if (str($name)->contains('-') || str($name)->contains('.')) {
-                        $replacedName = str($name)->replace('-', '_')->replace('.', '_');
-                        $services->put((string) $replacedName, $service);
-                        $services->forget((string) $name);
-                    }
-                }
-                $names = collect($services)->keys()->toArray();
-                $jsonNames = $json->keys()->toArray();
-                $diff = array_diff($jsonNames, $names);
-                $json = $json->filter(function ($value, $key) use ($diff) {
-                    return ! in_array($key, $diff);
-                });
-                if ($json) {
-                    $this->docker_compose_domains = json_encode($json);
-                } else {
-                    $this->docker_compose_domains = null;
-                }
-                $this->save();
+                $this->reconcileDockerComposeDomains($parsedServices);
             }
 
             return [
@@ -2048,6 +2199,31 @@ class Application extends BaseModel
 
             throw new RuntimeException("Docker Compose file not found at: $workdir$composeFile (branch: {$this->git_branch})<br><br>Check if you used the right extension (.yaml or .yml) in the compose file name.");
         }
+    }
+
+    private function reconcileDockerComposeDomains(mixed $parsedServices): void
+    {
+        $services = collect(data_get($parsedServices, 'services', []));
+        $serviceNames = $services->keys()->map(fn ($name) => (string) $name)->all();
+
+        if ($serviceNames === []) {
+            return;
+        }
+
+        $decoded = json_decode($this->docker_compose_domains, true);
+        $rekeyed = rekeyComposeDomainsToServiceNames(
+            is_array($decoded) ? $decoded : [],
+            $serviceNames,
+        );
+
+        $domains = collect($rekeyed)->filter(
+            fn ($value, $key) => findComposeServiceName((string) $key, $serviceNames) !== null
+        );
+
+        $this->docker_compose_domains = $domains->isNotEmpty()
+            ? json_encode($domains->all())
+            : null;
+        $this->save();
     }
 
     public function parseContainerLabels(?ApplicationPreview $preview = null)
@@ -2375,6 +2551,14 @@ class Application extends BaseModel
             'limits_cpuset' => $this->limits_cpuset,
             'limits_cpu_shares' => $this->limits_cpu_shares,
         ];
+    }
+
+    private function urlHostWithPort(array $url): string
+    {
+        $host = $url['host'] ?? '';
+        $port = isset($url['port']) ? ":{$url['port']}" : '';
+
+        return "{$host}{$port}";
     }
 
     public function generateConfig($is_json = false)

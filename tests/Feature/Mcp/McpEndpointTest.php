@@ -6,6 +6,7 @@ use App\Models\Server;
 use App\Models\Team;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Once;
 
 uses(RefreshDatabase::class);
@@ -64,12 +65,50 @@ function mcpToolJson($response): array
     return json_decode($response->json('result.content.0.text'), true);
 }
 
+function expectMcpAuditLog(array $expected): void
+{
+    $auditChannel = Mockery::mock();
+
+    Log::shouldReceive('channel')
+        ->with('audit')
+        ->once()
+        ->andReturn($auditChannel);
+
+    $auditChannel
+        ->shouldReceive('info')
+        ->once()
+        ->with('mcp.tool.called', Mockery::on(fn (array $context) => collect($expected)->every(
+            fn ($value, $key) => data_get($context, $key) === $value,
+        )));
+}
+
 test('MCP endpoint returns 404 when the instance setting is disabled', function () {
     InstanceSettings::query()->where('id', 0)->update(['is_mcp_server_enabled' => false]);
     Once::flush();
 
     $response = mcpPost(['jsonrpc' => '2.0', 'id' => 1, 'method' => 'tools/list']);
     $response->assertStatus(404);
+});
+
+test('MCP endpoint returns 403 when the token team has MCP disabled', function () {
+    $this->team->update(['is_mcp_server_enabled' => false]);
+    $token = $this->user->createToken('mcp-read', ['read'])->plainTextToken;
+
+    $response = mcpListTools($token);
+
+    $response->assertForbidden();
+    $response->assertJson(['message' => 'MCP server is disabled for this team.']);
+});
+
+test('MCP endpoint is enabled for teams by default', function () {
+    $defaultTeam = Team::factory()->create();
+    $this->user->teams()->attach($defaultTeam->id, ['role' => 'owner']);
+    session(['currentTeam' => $defaultTeam]);
+    $token = $this->user->createToken('mcp-read', ['read'])->plainTextToken;
+
+    $response = mcpListTools($token);
+
+    $response->assertOk();
 });
 
 test('MCP endpoint rejects unauthenticated requests', function () {
@@ -95,8 +134,13 @@ test('MCP endpoint lists tools for an authenticated token', function () {
         'get_database',
         'list_services',
         'get_service',
+        'get_project',
+        'list_deployments',
+        'get_logs',
+        'list_env_keys',
     );
     expect($toolNames)->not->toContain('get_resource_status');
+    expect($toolNames)->toContain('coolify_help', 'control', 'deploy');
 });
 
 test('list_projects returns summary + pagination scoped to the token team', function () {
@@ -156,10 +200,18 @@ test('get_infrastructure_overview returns counts', function () {
 
     $body = mcpToolJson($response);
     expect($body)->toHaveKey('data');
-    expect($body['data'])->toHaveKeys(['coolify_version', 'servers', 'projects', 'counts']);
+    expect($body['data'])->toHaveKeys(['coolify_version', 'servers', 'projects', 'counts', 'health_hints']);
     expect($body['data']['counts']['projects'])->toBe(2);
     expect($body['data']['projects'])->toHaveCount(2);
     expect($body['data']['projects'][0])->toHaveKey('counts');
+    expect($body['data']['projects'][0]['counts'])->toHaveKeys(['applications', 'services', 'databases']);
+    expect($body['data']['health_hints'])->toHaveKeys([
+        'unreachable_servers',
+        'applications_not_running',
+        'services_not_running',
+        'databases_not_running',
+        'next',
+    ]);
 });
 
 test('get_server scrubs sensitive nested data and exposes connection_timeout', function () {
@@ -191,6 +243,48 @@ test('tool calls fail when the token lacks the read ability', function () {
 
     expect($response->json('result.isError'))->toBeTrue();
     expect($response->json('result.content.0.text'))->toContain('Missing required permissions');
+});
+
+test('MCP tools audit successful execution with the actual tool name', function () {
+    Project::create(['name' => 'Mine', 'team_id' => $this->team->id]);
+    $token = $this->user->createToken('mcp-read', ['read'])->plainTextToken;
+
+    expectMcpAuditLog([
+        'tool' => 'list_projects',
+        'team_id' => $this->team->id,
+        'outcome' => 'success',
+    ]);
+
+    mcpCallTool($token, 'list_projects')->assertOk();
+});
+
+test('MCP tools audit denied execution after ability checks', function () {
+    $token = $this->user->createToken('mcp-no-abilities', [])->plainTextToken;
+
+    expectMcpAuditLog([
+        'tool' => 'list_projects',
+        'team_id' => $this->team->id,
+        'outcome' => 'denied',
+    ]);
+
+    $response = mcpCallTool($token, 'list_projects');
+    $response->assertOk();
+    expect($response->json('result.isError'))->toBeTrue();
+});
+
+test('MCP tools audit execution errors after tool handling', function () {
+    $token = $this->user->createToken('mcp-read', ['read'])->plainTextToken;
+
+    expectMcpAuditLog([
+        'tool' => 'get_server',
+        'team_id' => $this->team->id,
+        'outcome' => 'error',
+        'resource_uuid' => 'missing-server',
+    ]);
+
+    $response = mcpCallTool($token, 'get_server', ['uuid' => 'missing-server']);
+    $response->assertOk();
+    expect($response->json('result.isError'))->toBeTrue();
 });
 
 test('MCP rejects token when user no longer belongs to token team', function () {

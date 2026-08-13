@@ -1,6 +1,4 @@
-<div class="w-full max-h-[70vh] overflow-y-auto pr-1 -mt-4">
-    <div class="pb-4 text-sm dark:text-neutral-400">Identifiers for this resource. Read-only</div>
-
+<div class="w-full max-h-[70vh] overflow-y-auto pr-1 pt-1">
     <div class="flex flex-col gap-6">
         <div>
             <h3>Resource</h3>
@@ -45,10 +43,10 @@
                 <h3>Stack Sub-Resources</h3>
                 <div class="pt-2 grid grid-cols-1 gap-3 md:grid-cols-2">
                     @foreach ($stack_applications as $item)
-                        <x-forms.copy-button :label="'Application — ' . $item['name']" :text="$item['uuid']" />
+                        <x-forms.copy-button :label="'Application: ' . $item['name']" :text="$item['uuid']" />
                     @endforeach
                     @foreach ($stack_databases as $item)
-                        <x-forms.copy-button :label="'Database — ' . $item['name']" :text="$item['uuid']" />
+                        <x-forms.copy-button :label="'Database: ' . $item['name']" :text="$item['uuid']" />
                     @endforeach
                 </div>
             </div>

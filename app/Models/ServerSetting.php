@@ -109,9 +109,24 @@ class ServerSetting extends Model
         'sentinel_token' => 'encrypted',
         'is_reachable' => 'boolean',
         'is_usable' => 'boolean',
+        'is_build_server' => 'boolean',
         'is_terminal_enabled' => 'boolean',
         'disable_application_image_retention' => 'boolean',
         'connection_timeout' => 'integer',
+    ];
+
+    /**
+     * Sensitive fields hidden by default in serialized output (toArray/toJson).
+     * API controllers should call makeVisible([...]) for callers with the
+     * `read:sensitive` or `root` token ability.
+     */
+    protected $hidden = [
+        'sentinel_token',
+        'sentinel_custom_url',
+        'logdrain_newrelic_license_key',
+        'logdrain_axiom_api_key',
+        'logdrain_custom_config',
+        'logdrain_custom_config_parser',
     ];
 
     protected static function booted()
@@ -204,7 +219,22 @@ class ServerSetting extends Model
         return $token;
     }
 
-    public function generateSentinelUrl(bool $save = true, bool $ignoreEvent = false)
+    public function ensureSentinelUrl(): string
+    {
+        $url = $this->sentinel_custom_url;
+
+        if (blank($url)) {
+            $url = $this->generateSentinelUrl(ignoreEvent: true);
+        }
+
+        if (blank($url)) {
+            throw new \RuntimeException('Set an instance FQDN, public IP, or reachable Coolify URL before enabling Sentinel.');
+        }
+
+        return $url;
+    }
+
+    public function generateSentinelUrl(bool $save = true, bool $ignoreEvent = false): ?string
     {
         $domain = null;
         $settings = InstanceSettings::get();
@@ -216,6 +246,8 @@ class ServerSetting extends Model
             $domain = 'http://'.$settings->public_ipv4.':8000';
         } elseif ($settings->public_ipv6) {
             $domain = 'http://'.$settings->public_ipv6.':8000';
+        } else {
+            $domain = $this->sentinelUrlFromCurrentRequest();
         }
         $this->sentinel_custom_url = $domain;
         if ($save) {
@@ -227,6 +259,29 @@ class ServerSetting extends Model
         }
 
         return $domain;
+    }
+
+    private function sentinelUrlFromCurrentRequest(): ?string
+    {
+        if (! app()->bound('request')) {
+            return null;
+        }
+
+        $request = request();
+        $host = strtolower($request->getHost());
+
+        if (
+            $host === 'localhost' ||
+            str_ends_with($host, '.localhost') ||
+            $host === '::1' ||
+            $host === '::' ||
+            $host === '0.0.0.0' ||
+            str_starts_with($host, '127.')
+        ) {
+            return null;
+        }
+
+        return $request->getSchemeAndHttpHost();
     }
 
     public function server()
