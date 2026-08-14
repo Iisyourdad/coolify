@@ -2,8 +2,8 @@
 
 return [
     'coolify' => [
-        'version' => env('COOLIFY_VERSION') ?: '4.3.2',
-        'helper_version' => '1.0.14',
+        'version' => env('COOLIFY_VERSION') ?: '4.3.3',
+        'helper_version' => '1.0.15',
         'realtime_version' => '1.0.17',
         'railpack_version' => '0.23.0',
         'self_hosted' => env('SELF_HOSTED', true),
@@ -63,6 +63,7 @@ return [
 
     'docker' => [
         'minimum_required_version' => '24.0',
+        'stop_timeout_flag_since' => '28.0.0',
     ],
 
     'ssh' => [

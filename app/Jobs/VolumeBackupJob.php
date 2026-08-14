@@ -77,14 +77,20 @@ class VolumeBackupJob implements ShouldBeEncrypted, ShouldQueue
             $source = $this->backup->sourcePath();
             $containerName = 'volume-backup-'.$this->execution->uuid;
             $image = coolifyHelperImage().':'.getHelperVersion();
+            $compressionCpuPercentage = $this->compressionCpuPercentage($server);
+            $this->logCompressorInDevelopment($image, $server, $compressionCpuPercentage);
             $verifySourceCommand = $target instanceof LocalPersistentVolume && blank($target->host_path)
                 ? 'docker volume inspect '.escapeshellarg($source).' >/dev/null'
                 : 'test -d '.escapeshellarg($source);
 
+            $archiveScript = "compressor='gzip -3'; "
+                ."if command -v pigz >/dev/null 2>&1; then compressor=\"pigz -3 -p \$(( (\$(nproc) * {$compressionCpuPercentage} + 99) / 100 ))\"; fi; "
+                .'tar -I "$compressor" -cf - -C /volume .';
             $archiveCommand = 'docker run --rm --name '.escapeshellarg($containerName)
                 .' -v '.escapeshellarg($source.':/volume:ro')
                 .' '.escapeshellarg($image)
-                .' tar -czf - -C /volume . > '.escapeshellarg($backupLocation);
+                .' sh -c '.escapeshellarg($archiveScript)
+                .' > '.escapeshellarg($backupLocation);
 
             if ($this->backup->stop_during_backup) {
                 $containers = $this->containersUsingVolume($source, $server);
@@ -330,6 +336,36 @@ class VolumeBackupJob implements ShouldBeEncrypted, ShouldQueue
                 disableMultiplexing: true,
             );
         }
+    }
+
+    private function logCompressorInDevelopment(string $image, Server $server, int $compressionCpuPercentage): void
+    {
+        if (! isDev()) {
+            return;
+        }
+
+        $script = "if command -v pigz >/dev/null 2>&1; then printf 'pigz -3 -p %s' \"\$(( (\$(nproc) * {$compressionCpuPercentage} + 99) / 100 ))\"; else printf 'gzip -3'; fi";
+        $compressor = instant_remote_process(
+            ['docker run --rm '.escapeshellarg($image).' sh -c '.escapeshellarg($script)],
+            $server,
+            timeout: 60,
+            disableMultiplexing: true,
+        );
+
+        Log::info('Volume backup compressor selected', [
+            'backup_id' => $this->backup->id,
+            'execution_id' => $this->execution?->id,
+            'compressor' => $compressor,
+            'helper_image' => $image,
+            'cpu_percentage' => $compressionCpuPercentage,
+        ]);
+    }
+
+    private function compressionCpuPercentage(Server $server): int
+    {
+        $percentage = (int) ($server->settings->backup_compression_cpu_percentage ?? 25);
+
+        return in_array($percentage, [25, 50, 75, 100], true) ? $percentage : 25;
     }
 
     private function removeExpiredBackups(Server $server): void
