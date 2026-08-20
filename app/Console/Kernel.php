@@ -16,10 +16,7 @@ use App\Jobs\ScheduledJobManager;
 use App\Jobs\SendMasterUpdateReportJob;
 use App\Jobs\ServerManagerJob;
 use App\Jobs\UpdateCoolifyJob;
-use App\Jobs\V5ReconcileServersJob;
-use App\Jobs\V5RotateAgentTokensJob;
 use App\Models\InstanceSettings;
-use App\Support\V5\V5Feature;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Console\Kernel as ConsoleKernel;
 
@@ -52,11 +49,6 @@ class Kernel extends ConsoleKernel
         $this->scheduleInstance->command('cleanup:redis --clear-locks')->daily();
         $this->scheduleInstance->command('sanctum:prune-expired --hours=1')->hourly()->onOneServer();
         $this->scheduleInstance->job(new ApiTokenExpirationWarningJob)->hourly()->onOneServer();
-
-        if (V5Feature::enabled()) {
-            $this->scheduleInstance->job(new V5ReconcileServersJob)->everyFiveMinutes()->withoutOverlapping()->onOneServer();
-            $this->scheduleInstance->job(new V5RotateAgentTokensJob)->everyFifteenMinutes()->withoutOverlapping()->onOneServer();
-        }
 
         if (isDev()) {
             // Instance Jobs
