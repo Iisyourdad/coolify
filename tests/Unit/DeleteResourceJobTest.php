@@ -1,5 +1,6 @@
 <?php
 
+use App\Actions\Service\DeleteService;
 use App\Exceptions\EdgeProxyCleanupPendingException;
 use App\Jobs\DeleteResourceJob;
 use App\Models\Application;
@@ -291,4 +292,76 @@ it('uses the shared application edge lock to prevent deletion and sync races', f
         ->and($middlewares[0]->shareKey)->toBeTrue()
         ->and($middlewares[0]->releaseAfter)->toBe(30)
         ->and($job->tries)->toBe(0);
+});
+
+it('still gates service deletion on edge cleanup when stopping the service throws', function () {
+    $service = Mockery::mock(Service::class)->makePartial();
+    $service->uuid = 'service-stop-failure';
+
+    $deleteService = Mockery::mock(DeleteService::class);
+    $deleteService->shouldReceive('cleanupRemote')
+        ->once()
+        ->with($service, false, false, false)
+        ->andThrow(new EdgeProxyCleanupPendingException('service', $service->uuid, [
+            'edge route cleanup failed',
+        ]));
+    app()->instance(DeleteService::class, $deleteService);
+
+    $job = new class($service, false, false, false, false) extends DeleteResourceJob
+    {
+        protected function stopServiceResource(): void
+        {
+            throw new RuntimeException('service stop failed');
+        }
+
+        public function runRemoteServiceCleanup(): void
+        {
+            $this->stopAndDeleteServiceResource();
+        }
+    };
+
+    expect(fn () => $job->runRemoteServiceCleanup())
+        ->toThrow(EdgeProxyCleanupPendingException::class, 'Edge cleanup pending for service service-stop-failure');
+});
+
+it('continues local service deletion after a stop failure when edge cleanup succeeds', function () {
+    $service = Mockery::mock(Service::class)->makePartial();
+    $service->uuid = 'service-ordinary-stop-failure';
+    $service->shouldReceive('trashed')->once()->andReturn(false);
+    $service->shouldReceive('delete')->once();
+
+    $deleteService = Mockery::mock(DeleteService::class);
+    $deleteService->shouldReceive('cleanupRemote')
+        ->once()
+        ->with($service, false, false, false);
+    app()->instance(DeleteService::class, $deleteService);
+
+    $job = new class($service, false, false, false, false) extends DeleteResourceJob
+    {
+        public bool $deletedLocally = false;
+
+        public bool $loggedRemoteFailure = false;
+
+        protected function stopServiceResource(): void
+        {
+            throw new RuntimeException('service stop failed');
+        }
+
+        protected function deleteLocalResource(): void
+        {
+            $this->deletedLocally = true;
+        }
+
+        protected function logRemoteCleanupFailure(Throwable $exception): void
+        {
+            $this->loggedRemoteFailure = $exception->getMessage() === 'service stop failed';
+        }
+
+        protected function queueStuckedResourcesCleanup(): void {}
+    };
+
+    $job->handle();
+
+    expect($job->deletedLocally)->toBeTrue()
+        ->and($job->loggedRemoteFailure)->toBeTrue();
 });

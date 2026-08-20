@@ -158,13 +158,29 @@ class DeleteResourceJob implements ShouldBeEncrypted, ShouldQueue
 
     protected function stopAndDeleteServiceResource(): void
     {
-        StopService::run($this->resource, $this->deleteConnectedNetworks, $this->dockerCleanup);
+        $stopException = null;
+
+        try {
+            $this->stopServiceResource();
+        } catch (\Throwable $exception) {
+            $stopException = $exception;
+        }
+
         app(DeleteService::class)->cleanupRemote(
             $this->resource,
             $this->deleteVolumes,
             $this->deleteConnectedNetworks,
             $this->deleteConfigurations,
         );
+
+        if ($stopException instanceof \Throwable) {
+            throw $stopException;
+        }
+    }
+
+    protected function stopServiceResource(): void
+    {
+        StopService::run($this->resource, $this->deleteConnectedNetworks, $this->dockerCleanup);
     }
 
     protected function prepareResourceForDeletion(): void
