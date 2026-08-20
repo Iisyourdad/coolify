@@ -21,7 +21,7 @@ it('registers the upload reicon used by import backup navigation', function () {
 });
 
 it('uses the upload reicon for import backup in database configuration nav', function () {
-    $contents = file_get_contents(resource_path('views/livewire/project/database/configuration.blade.php'));
+    $contents = file_get_contents(resource_path('views/components/database/configuration-sidebar.blade.php'));
 
     expect($contents)
         ->toContain("'label' => 'Import Backup'")

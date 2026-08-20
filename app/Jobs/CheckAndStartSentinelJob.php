@@ -37,6 +37,10 @@ class CheckAndStartSentinelJob implements ShouldBeEncrypted, ShouldBeUnique, Sho
 
     public function handle(): void
     {
+        if (! $this->sentinelIsEnabled()) {
+            return;
+        }
+
         $latestVersion = get_latest_sentinel_version();
 
         // Check if sentinel is running
@@ -44,7 +48,7 @@ class CheckAndStartSentinelJob implements ShouldBeEncrypted, ShouldBeUnique, Sho
         $sentinelFoundJson = json_decode($sentinelFound, true);
         $sentinelStatus = data_get($sentinelFoundJson, '0.State.Status', 'exited');
         if ($sentinelStatus !== 'running') {
-            StartSentinel::run(server: $this->server, restart: true, latestVersion: $latestVersion);
+            $this->startSentinel($latestVersion);
 
             return;
         }
@@ -54,15 +58,31 @@ class CheckAndStartSentinelJob implements ShouldBeEncrypted, ShouldBeUnique, Sho
             $runningVersion = '0.0.0';
         }
         if ($latestVersion === '0.0.0' && $runningVersion === '0.0.0') {
-            StartSentinel::run(server: $this->server, restart: true, latestVersion: 'latest');
+            $this->startSentinel('latest');
 
             return;
         } else {
             if (version_compare($runningVersion, $latestVersion, '<')) {
-                StartSentinel::run(server: $this->server, restart: true, latestVersion: $latestVersion);
+                $this->startSentinel($latestVersion);
 
                 return;
             }
         }
+    }
+
+    private function sentinelIsEnabled(): bool
+    {
+        $this->server->unsetRelation('settings');
+
+        return $this->server->isSentinelEnabled();
+    }
+
+    private function startSentinel(string $latestVersion): void
+    {
+        if (! $this->sentinelIsEnabled()) {
+            return;
+        }
+
+        StartSentinel::run(server: $this->server, restart: true, latestVersion: $latestVersion);
     }
 }

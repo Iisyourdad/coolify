@@ -32,7 +32,10 @@ it('keeps application pending deletion when edge route cleanup fails', function 
     {
         protected function prepareResourceForDeletion(): void {}
 
-        protected function dispatchDockerCleanupIfNeeded(): void {}
+        protected function deleteLocalResource(): void
+        {
+            $this->resource->forceDelete();
+        }
 
         protected function queueStuckedResourcesCleanup(): void {}
     };
@@ -92,7 +95,10 @@ it('force deletes application after edge cleanup succeeds', function () {
     {
         protected function prepareResourceForDeletion(): void {}
 
-        protected function dispatchDockerCleanupIfNeeded(): void {}
+        protected function deleteLocalResource(): void
+        {
+            $this->resource->forceDelete();
+        }
 
         protected function queueStuckedResourcesCleanup(): void {}
     };

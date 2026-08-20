@@ -73,6 +73,13 @@ it('closes the client-side command palette without a Livewire request', function
         ->not->toContain('closeTimer');
 });
 
+it('closes the mobile sidebar when the command palette opens', function () {
+    $layout = file_get_contents(resource_path('views/layouts/app.blade.php'));
+
+    expect($layout)
+        ->toContain('@open-global-search.window="open = false"');
+});
+
 it('keeps palette content intact during the close animation to prevent flicker', function () {
     $view = file_get_contents(resource_path('views/livewire/global-search.blade.php'));
 

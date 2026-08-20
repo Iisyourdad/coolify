@@ -107,6 +107,7 @@ class StackForm extends Component
                 $rules = data_get($field, 'rules', 'nullable');
                 $isPassword = data_get($field, 'isPassword', false);
                 $customHelper = data_get($field, 'customHelper', false);
+                $sortOrder = data_get($field, 'sortOrder');
                 $this->fields->put($key, [
                     'serviceName' => $serviceName,
                     'key' => $key,
@@ -115,6 +116,7 @@ class StackForm extends Component
                     'isPassword' => $isPassword,
                     'rules' => $rules,
                     'customHelper' => $customHelper,
+                    'sortOrder' => $sortOrder,
                 ]);
 
                 $this->validationAttributes["fields.$key.value"] = $fieldKey;
@@ -122,7 +124,7 @@ class StackForm extends Component
         }
         $this->fields = $this->fields->groupBy('serviceName')->map(function ($group) {
             return $group->sortBy(function ($field) {
-                return data_get($field, 'isPassword') ? 1 : 0;
+                return data_get($field, 'sortOrder') ?? (data_get($field, 'isPassword') ? 1 : 0);
             })->mapWithKeys(function ($field) {
                 return [$field['key'] => $field];
             });

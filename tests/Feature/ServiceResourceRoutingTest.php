@@ -1,6 +1,6 @@
 <?php
 
-use App\Livewire\Project\Database\Import as DatabaseImport;
+use App\Livewire\Project\Database\ImportForm as DatabaseImportForm;
 use App\Livewire\Project\Service\Heading;
 use App\Models\Environment;
 use App\Models\InstanceSettings;
@@ -114,7 +114,7 @@ test('does not open service database backups route from another team', function 
 })->throws(NotFoundHttpException::class);
 
 test('does not resolve service database import component from another team', function () {
-    $component = app(DatabaseImport::class);
+    $component = app(DatabaseImportForm::class);
     $component->parameters = [
         'project_uuid' => $this->projectA->uuid,
         'environment_uuid' => $this->environmentA->uuid,
@@ -163,44 +163,46 @@ test('service database backup schedules use dedicated general retention and exec
 
     $this->get($generalUrl)
         ->assertOk()
+        ->assertSee('Backup schedule')
         ->assertSee('Frequency')
-        ->assertDontSee('S3 Enabled')
-        ->assertDontSee('Number of backups to keep')
-        ->assertDontSee('Cleanup Failed Backups')
-        ->assertDontSee('Delete Backups and Schedule');
+        ->assertDontSee('Maximum storage (GB)')
+        ->assertDontSee('Clean failed backups')
+        ->assertDontSee('Delete schedule');
 
     $this->get($generalUrl.'/s3')
         ->assertOk()
-        ->assertSee('S3 Storage')
-        ->assertDontSee('S3 Storage Retention')
-        ->assertDontSee('Local Backup Retention')
+        ->assertSee('S3 storage')
+        ->assertSee('No validated S3 storage')
         ->assertDontSee('Frequency')
-        ->assertDontSee('Cleanup Failed Backups');
+        ->assertDontSee('Maximum storage (GB)')
+        ->assertDontSee('Clean failed backups');
 
     $this->get($generalUrl.'/retention')
         ->assertOk()
-        ->assertSee('Local Backup Retention')
-        ->assertSee('S3 Storage Retention')
-        ->assertSee('Number of backups to keep')
+        ->assertSee('Retention')
+        ->assertSee('Local backups')
+        ->assertSee('S3 backups')
+        ->assertSee('Backups to keep')
+        ->assertSee('Days to keep')
+        ->assertSee('Maximum storage (GB)')
         ->assertDontSee('Frequency')
-        ->assertDontSee('Cleanup Failed Backups');
+        ->assertDontSee('Clean failed backups');
 
     $this->get($generalUrl.'/executions')
         ->assertOk()
-        ->assertSee('<h2 class="py-0">Executions</h2>', false)
+        ->assertSee('<h2>Executions</h2>', false)
         ->assertDontSee('Executions <span', false)
-        ->assertSee('Cleanup Failed Backups')
+        ->assertSee('Clean failed backups')
         ->assertDontSee('Frequency')
-        ->assertDontSee('Number of backups to keep');
+        ->assertDontSee('Backups to keep');
 
     $this->get($generalUrl.'/danger')
         ->assertOk()
-        ->assertSee('Danger Zone')
-        ->assertSee('Delete Scheduled Backup')
-        ->assertSee('Delete Backups and Schedule')
+        ->assertSee('Delete backup schedule')
+        ->assertSee('Delete schedule')
         ->assertDontSee('Frequency')
-        ->assertDontSee('Number of backups to keep')
-        ->assertDontSee('Cleanup Failed Backups');
+        ->assertDontSee('Backups to keep')
+        ->assertDontSee('Clean failed backups');
 });
 
 test('service storage backups page includes schedules from all compose databases', function () {

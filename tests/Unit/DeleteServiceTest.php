@@ -37,7 +37,7 @@ it('keeps service pending deletion when edge route cleanup fails', function () {
         }
     };
 
-    expect(fn () => $action->handle($service, false, false, false, false))
+    expect(fn () => $action->cleanupRemote($service, false, false, false))
         ->toThrow(EdgeProxyCleanupPendingException::class, 'Edge cleanup pending for service service-cleanup-failure');
 });
 
@@ -70,7 +70,7 @@ it('keeps service pending deletion when edge port cleanup fails', function () {
         }
     };
 
-    expect(fn () => $action->handle($service, false, false, false, false))
+    expect(fn () => $action->cleanupRemote($service, false, false, false))
         ->toThrow(EdgeProxyCleanupPendingException::class, 'Edge cleanup pending for service service-port-cleanup-failure');
 });
 
@@ -84,14 +84,15 @@ it('force deletes service after edge cleanup succeeds', function () {
     $service->setRelation('scheduled_tasks', collect());
     $service->shouldReceive('applications->get')->once()->andReturn(collect());
     $service->shouldReceive('databases->get')->once()->andReturn(collect());
+    $service->shouldReceive('environment_variables->delete')->once();
     $service->shouldReceive('tags->detach')->once();
     $service->shouldReceive('forceDelete')->once();
 
     $routeService = Mockery::mock(EdgeProxyRemoteRouteService::class);
-    $routeService->shouldReceive('deleteService')->once()->with($service);
+    $routeService->shouldReceive('deleteService')->once()->with($service)->andReturn([]);
 
     $portForwardService = Mockery::mock(EdgeProxyRemotePortForwardService::class);
-    $portForwardService->shouldReceive('deleteService')->once()->with($service);
+    $portForwardService->shouldReceive('deleteService')->once()->with($service)->andReturn([]);
 
     app()->instance(EdgeProxyRemoteRouteService::class, $routeService);
     app()->instance(EdgeProxyRemotePortForwardService::class, $portForwardService);
@@ -104,7 +105,8 @@ it('force deletes service after edge cleanup succeeds', function () {
         }
     };
 
-    $action->handle($service, false, false, false, false);
+    $action->cleanupRemote($service, false, false, false);
+    $action->deleteLocal($service);
 });
 
 it('force deletes orphaned service metadata when server is missing', function () {
@@ -115,6 +117,7 @@ it('force deletes orphaned service metadata when server is missing', function ()
     $service->setRelation('scheduled_tasks', collect());
     $service->shouldReceive('applications->get')->once()->andReturn(collect());
     $service->shouldReceive('databases->get')->once()->andReturn(collect());
+    $service->shouldReceive('environment_variables->delete')->once();
     $service->shouldReceive('tags->detach')->once();
     $service->shouldReceive('forceDelete')->once();
 
@@ -139,7 +142,8 @@ it('force deletes orphaned service metadata when server is missing', function ()
         }
     };
 
-    $action->handle($service, true, true, true, true);
+    $action->cleanupRemote($service, true, true, true);
+    $action->deleteLocal($service);
 
     expect($action->commands)->toBe([]);
 });
@@ -196,6 +200,6 @@ it('keeps service pending deletion when concrete edge route cleanup hits an ssh 
         }
     };
 
-    expect(fn () => $action->handle($service, false, false, false, false))
+    expect(fn () => $action->cleanupRemote($service, false, false, false))
         ->toThrow(EdgeProxyCleanupPendingException::class, 'Edge cleanup pending for service service-concrete-ssh-cleanup-failure');
 });

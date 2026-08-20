@@ -2,64 +2,48 @@
 
 namespace App\Actions\Service;
 
-use App\Actions\Server\CleanupDocker;
 use App\Exceptions\EdgeProxyCleanupPendingException;
 use App\Models\Server;
 use App\Models\Service;
 use App\Services\EdgeProxyRemotePortForwardService;
 use App\Services\EdgeProxyRemoteRouteService;
-use Lorisleiva\Actions\Concerns\AsAction;
 
 class DeleteService
 {
-    use AsAction;
-
-    public function handle(Service $service, bool $deleteVolumes, bool $deleteConnectedNetworks, bool $deleteConfigurations, bool $dockerCleanup)
+    public function cleanupRemote(Service $service, bool $deleteVolumes, bool $deleteConnectedNetworks, bool $deleteConfigurations): void
     {
         $server = $this->resolveServer($service);
+        $remoteCleanupException = null;
 
         try {
             if ($deleteVolumes && $server?->isFunctional()) {
-                $storagesToDelete = collect([]);
-
-                $service->environment_variables()->delete();
                 $commands = [];
                 foreach ($service->applications()->get() as $application) {
-                    $storages = $application->persistentStorages()->get();
-                    foreach ($storages as $storage) {
-                        $storagesToDelete->push($storage);
+                    foreach ($application->persistentStorages()->get() as $storage) {
+                        $commands[] = 'docker volume rm -f '.escapeshellarg($storage->name);
                     }
                 }
                 foreach ($service->databases()->get() as $database) {
-                    $storages = $database->persistentStorages()->get();
-                    foreach ($storages as $storage) {
-                        $storagesToDelete->push($storage);
+                    foreach ($database->persistentStorages()->get() as $storage) {
+                        $commands[] = 'docker volume rm -f '.escapeshellarg($storage->name);
                     }
                 }
-                foreach ($storagesToDelete as $storage) {
-                    $commands[] = 'docker volume rm -f '.escapeshellarg($storage->name);
-                }
-
-                // Execute volume deletion first, this must be done first otherwise volumes will not be deleted.
-                if (! empty($commands)) {
-                    foreach ($commands as $command) {
-                        $result = $this->runRemoteCommands([$command], $server, false);
-                        if ($result !== null && $result !== 0) {
-                            $this->logError('Error deleting volumes: '.$result);
-                        }
-                    }
+                foreach ($commands as $command) {
+                    $this->runRemoteCommands([$command], $server, false);
                 }
             }
 
             if ($deleteConnectedNetworks && $server instanceof Server) {
                 $this->deleteConnectedNetworks($service, $server);
             }
-
+            if ($deleteConfigurations && $server instanceof Server) {
+                $this->deleteConfigurations($service, $server);
+            }
             if ($server instanceof Server) {
-                $this->runRemoteCommands(["docker rm -f $service->uuid"], $server, throwError: false);
+                $this->runRemoteCommands(['docker rm -f '.escapeshellarg($service->uuid)], $server, throwError: false);
             }
         } catch (\Throwable $exception) {
-            throw new \RuntimeException($exception->getMessage(), previous: $exception);
+            $remoteCleanupException = $exception;
         }
 
         $edgeCleanupFailures = $this->cleanupEdgeProxyState($service);
@@ -67,9 +51,13 @@ class DeleteService
             throw new EdgeProxyCleanupPendingException('service', $service->uuid, $edgeCleanupFailures);
         }
 
-        if ($deleteConfigurations && $server instanceof Server) {
-            $this->deleteConfigurations($service, $server);
+        if ($remoteCleanupException instanceof \Throwable) {
+            throw new \RuntimeException($remoteCleanupException->getMessage(), previous: $remoteCleanupException);
         }
+    }
+
+    public function deleteLocal(Service $service): void
+    {
         foreach ($service->applications()->get() as $application) {
             $application->forceDelete();
         }
@@ -79,15 +67,12 @@ class DeleteService
         foreach ($service->scheduled_tasks as $task) {
             $task->delete();
         }
+        $service->environment_variables()->delete();
         $service->tags()->detach();
         $service->forceDelete();
-
-        if ($dockerCleanup && $server instanceof Server) {
-            CleanupDocker::dispatch($server, false, false);
-        }
     }
 
-    protected function runRemoteCommands(array $commands, $server, bool $throwError = true): ?string
+    protected function runRemoteCommands(array $commands, Server $server, bool $throwError = true): ?string
     {
         return instant_remote_process($commands, $server, $throwError);
     }
@@ -101,9 +86,11 @@ class DeleteService
 
     protected function deleteConnectedNetworks(Service $service, Server $server): void
     {
+        $serviceUuid = escapeshellarg($service->uuid);
+
         $this->runRemoteCommands([
-            "docker network disconnect {$service->uuid} coolify-proxy",
-            "docker network rm {$service->uuid}",
+            "docker network disconnect {$serviceUuid} coolify-proxy",
+            "docker network rm {$serviceUuid}",
         ], $server, false);
     }
 
@@ -114,15 +101,20 @@ class DeleteService
             return;
         }
 
-        $this->runRemoteCommands(['rm -rf '.$workdir], $server, false);
+        $this->runRemoteCommands(['rm -rf '.escapeshellarg($workdir)], $server, false);
     }
 
+    /** @return array<int, string> */
     protected function cleanupEdgeProxyState(Service $service): array
     {
-        $failures = [
-            ...app(EdgeProxyRemoteRouteService::class)->deleteService($service),
-            ...app(EdgeProxyRemotePortForwardService::class)->deleteService($service),
-        ];
+        try {
+            $failures = [
+                ...app(EdgeProxyRemoteRouteService::class)->deleteService($service),
+                ...app(EdgeProxyRemotePortForwardService::class)->deleteService($service),
+            ];
+        } catch (\Throwable $exception) {
+            $failures = ['Unexpected edge proxy cleanup failure: '.$exception->getMessage()];
+        }
 
         foreach ($failures as $failure) {
             $this->logWarning($failure);
@@ -135,17 +127,6 @@ class DeleteService
     {
         if (app()->bound('log')) {
             app('log')->warning($message, $context);
-
-            return;
-        }
-
-        error_log($message.($context === [] ? '' : ' '.json_encode($context)));
-    }
-
-    protected function logError(string $message, array $context = []): void
-    {
-        if (app()->bound('log')) {
-            app('log')->error($message, $context);
 
             return;
         }
