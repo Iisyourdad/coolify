@@ -4,6 +4,7 @@ namespace App\Traits;
 
 use App\Services\RestartCountTracker;
 
+// Kept in the patch set for partial deployments that update models using it.
 trait HasRestartLimit
 {
     public function initializeHasRestartLimit(): void

@@ -8,6 +8,7 @@ use App\Support\RemoteSecretReferences;
 use Illuminate\Database\Eloquent\Relations\MorphOne;
 use RuntimeException;
 
+// Kept in the patch set for partial deployments that update models using it.
 trait HasSecretManager
 {
     /** @var array<string, string>|null */
