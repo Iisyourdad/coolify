@@ -623,7 +623,7 @@ function traefikCertResolverName(): string
     return config('constants.coolify.proxy.traefik.cert_resolver', 'letsencrypt');
 }
 
-function fqdnLabelsForTraefik(string $uuid, Collection $domains, bool $is_force_https_enabled = false, $onlyPort = null, ?Collection $serviceLabels = null, ?bool $is_gzip_enabled = true, ?bool $is_stripprefix_enabled = true, ?string $service_name = null, bool $generate_unique_uuid = false, ?string $image = null, string $redirect_direction = 'both', bool $is_http_basic_auth_enabled = false, ?string $http_basic_auth_username = null, ?string $http_basic_auth_password = null, ?Collection $noindex_domains = null, bool $use_public_cert_resolver = true, bool $escape_redirect_replacement_for_compose = true)
+function fqdnLabelsForTraefik(string $uuid, Collection $domains, bool $is_force_https_enabled = false, $onlyPort = null, ?Collection $serviceLabels = null, ?bool $is_gzip_enabled = true, ?bool $is_stripprefix_enabled = true, ?string $service_name = null, bool $generate_unique_uuid = false, ?string $image = null, string $redirect_direction = 'both', bool $is_http_basic_auth_enabled = false, ?string $http_basic_auth_username = null, ?string $http_basic_auth_password = null, ?Collection $noindex_domains = null, bool $use_public_cert_resolver = true, bool $escape_redirect_replacement_for_compose = true, array $domainPortOverrides = [])
 {
     $labels = collect([]);
     $labels->push('traefik.enable=true');
@@ -934,6 +934,7 @@ function generateLabelsApplication(Application $application, ?ApplicationPreview
                             http_basic_auth_password: $application->http_basic_auth_password,
                             use_public_cert_resolver: $usePublicCertResolver,
                             noindex_domains: $noindexDomains,
+                            domainPortOverrides: $application->domain_port_overrides ?? [],
                         ));
                         break;
                     case ProxyTypes::CADDY->value:
@@ -968,6 +969,7 @@ function generateLabelsApplication(Application $application, ?ApplicationPreview
                     use_public_cert_resolver: $usePublicCertResolver,
                     noindex_domains: $noindexDomains,
                     escape_redirect_replacement_for_compose: false,
+                    domainPortOverrides: $application->domain_port_overrides ?? [],
                 ));
                 $labels = $labels->merge(fqdnLabelsForCaddy(
                     network: $application->destination->network,
@@ -1010,6 +1012,7 @@ function generateLabelsApplication(Application $application, ?ApplicationPreview
                         use_public_cert_resolver: $usePublicCertResolver,
                         noindex_domains: $noindexDomains,
                         escape_redirect_replacement_for_compose: false,
+                        domainPortOverrides: $preview->domain_port_overrides ?? [],
                     ));
                     break;
                 case ProxyTypes::CADDY->value:
@@ -1042,6 +1045,7 @@ function generateLabelsApplication(Application $application, ?ApplicationPreview
                 use_public_cert_resolver: $usePublicCertResolver,
                 noindex_domains: $noindexDomains,
                 escape_redirect_replacement_for_compose: false,
+                domainPortOverrides: $preview->domain_port_overrides ?? [],
             ));
             $labels = $labels->merge(fqdnLabelsForCaddy(
                 network: $application->destination->network,
