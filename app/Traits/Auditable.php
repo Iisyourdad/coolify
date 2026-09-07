@@ -8,6 +8,8 @@ use Closure;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Str;
 
+// Kept in the patch set so partial patch deployments copy this dependency with
+// models that use it, even when the destination is behind the PR base branch.
 trait Auditable
 {
     private bool $auditLoggingEnabled = true;
