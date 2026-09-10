@@ -6,6 +6,7 @@ use App\Models\Application;
 use App\Models\Server;
 use App\Models\Service;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Symfony\Component\Yaml\Yaml;
 
@@ -41,7 +42,13 @@ class RemoteServerPortForwardService
         if (! $master instanceof Server || $master->id === $deploymentServer->id || $mappings->isEmpty()) {
             $this->cleanup($teamId, $type, $uuid); return;
         }
-        $mappings = $this->withoutReserved($master, $mappings);
+        [$mappings, $warnings] = $this->withoutReserved($master, $type, $uuid, $mappings);
+        foreach ($warnings as $warning) {
+            Log::warning($warning);
+        }
+        // Keep an existing healthy forwarder intact when a requested update only
+        // contains infrastructure ports that cannot be claimed by this feature.
+        if ($mappings->isEmpty() && $warnings !== []) return;
         $host = $this->targets->host($deploymentServer);
         if ($host === null || $mappings->isEmpty()) { $this->remove($master, $type, $uuid); return; }
         $this->assertNoCollision($master, $type, $uuid, $mappings);
@@ -70,12 +77,21 @@ class RemoteServerPortForwardService
         return $resource->environment_variables()->get()->mapWithKeys(fn ($v) => [$v->key => $v->value])->all();
     }
 
-    private function withoutReserved(Server $master, Collection $mappings): Collection
+    /** @return array{0: Collection, 1: list<string>} */
+    protected function withoutReserved(Server $master, string $type, string $uuid, Collection $mappings): array
     {
         $reserved = ['tcp:80', 'tcp:443'];
         // v4's Traefik default publishes QUIC/HTTP3 on 443/udp.
         if ($master->proxyType() === 'TRAEFIK') $reserved[] = 'udp:443';
-        return $mappings->reject(fn (array $m) => in_array("{$m['protocol']}:{$m['published']}", $reserved, true))->values();
+        $warnings = [];
+        $allowed = $mappings->reject(function (array $mapping) use ($reserved, $type, $uuid, &$warnings): bool {
+            $key = "{$mapping['protocol']}:{$mapping['published']}";
+            if (! in_array($key, $reserved, true)) return false;
+            $warnings[] = "Remote forwarding skipped {$key} for {$type} {$uuid}: this port is reserved by the master proxy infrastructure.";
+            return true;
+        })->values();
+
+        return [$allowed, $warnings];
     }
 
     private function assertNoCollision(Server $master, string $type, string $uuid, Collection $wanted): void
@@ -91,24 +107,42 @@ class RemoteServerPortForwardService
         }
     }
 
-    private function write(Server $master, int $teamId, string $type, string $uuid, string $host, Collection $mappings): void
+    protected function write(Server $master, int $teamId, string $type, string $uuid, string $host, Collection $mappings): void
     {
         $container = "coolify-remote-forward-{$type}-{$uuid}";
         $directory = rtrim(base_configuration_dir(), '/')."/remote-forwarders/{$type}-{$uuid}";
         $nginx = base64_encode($this->configuration->nginx($host, $mappings));
         $compose = base64_encode(Yaml::dump($this->configuration->compose($container, $directory, $teamId, $type, $uuid, $mappings), 8, 2));
         $tmp = Str::random(12);
+        $temporaryNginx = "{$directory}/nginx.conf.tmp-{$tmp}";
+        $temporaryCompose = "{$directory}/docker-compose.yaml.tmp-{$tmp}";
+        $previousNginx = "{$directory}/nginx.conf.previous-{$tmp}";
+        $previousCompose = "{$directory}/docker-compose.yaml.previous-{$tmp}";
+        $composeCommand = 'docker compose --project-directory '.escapeshellarg($directory).' -f '.escapeshellarg("{$directory}/docker-compose.yaml");
         $commands = [
+            'set -e',
             'mkdir -p '.escapeshellarg($directory),
-            "echo '{$nginx}' | base64 -d > ".escapeshellarg("{$directory}/nginx.conf.tmp-{$tmp}"),
-            "echo '{$compose}' | base64 -d > ".escapeshellarg("{$directory}/docker-compose.yaml.tmp-{$tmp}"),
-            'mv -f '.escapeshellarg("{$directory}/nginx.conf.tmp-{$tmp}").' '.escapeshellarg("{$directory}/nginx.conf"),
-            'mv -f '.escapeshellarg("{$directory}/docker-compose.yaml.tmp-{$tmp}").' '.escapeshellarg("{$directory}/docker-compose.yaml"),
-            'docker compose --project-directory '.escapeshellarg($directory).' -f '.escapeshellarg("{$directory}/docker-compose.yaml").' config -q',
-            'docker compose --project-directory '.escapeshellarg($directory).' -f '.escapeshellarg("{$directory}/docker-compose.yaml").' up -d --force-recreate',
+            "echo '{$nginx}' | base64 -d > ".escapeshellarg($temporaryNginx),
+            "echo '{$compose}' | base64 -d > ".escapeshellarg($temporaryCompose),
+            'docker compose --project-directory '.escapeshellarg($directory).' -f '.escapeshellarg($temporaryCompose).' config -q',
+            'docker run --rm --network none -v '.escapeshellarg($temporaryNginx.':/etc/nginx/nginx.conf:ro').' nginx:stable-alpine nginx -t',
+            // Back up the last known good files before the atomic replacement.
+            '[ ! -f '.escapeshellarg("{$directory}/nginx.conf").' ] || cp -f '.escapeshellarg("{$directory}/nginx.conf").' '.escapeshellarg($previousNginx),
+            '[ ! -f '.escapeshellarg("{$directory}/docker-compose.yaml").' ] || cp -f '.escapeshellarg("{$directory}/docker-compose.yaml").' '.escapeshellarg($previousCompose),
+            'mv -f '.escapeshellarg($temporaryNginx).' '.escapeshellarg("{$directory}/nginx.conf"),
+            'mv -f '.escapeshellarg($temporaryCompose).' '.escapeshellarg("{$directory}/docker-compose.yaml"),
+            "if ! {$composeCommand} up -d --force-recreate; then ".
+                '[ ! -f '.escapeshellarg($previousNginx).' ] || mv -f '.escapeshellarg($previousNginx).' '.escapeshellarg("{$directory}/nginx.conf").'; '.
+                '[ ! -f '.escapeshellarg($previousCompose).' ] || mv -f '.escapeshellarg($previousCompose).' '.escapeshellarg("{$directory}/docker-compose.yaml").'; '.
+                "{$composeCommand} up -d || true; exit 1; fi",
+            'rm -f '.escapeshellarg($previousNginx).' '.escapeshellarg($previousCompose),
             'if which ufw >/dev/null 2>&1 && which ufw-docker >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "^Status: active"; then ufw-docker delete allow '.escapeshellarg($container).' >/dev/null 2>&1 || true; ufw-docker allow '.escapeshellarg($container).'; fi',
         ];
-        $this->run($master, $commands);
+        try {
+            $this->run($master, $commands);
+        } catch (\Throwable $exception) {
+            throw new \RuntimeException("Remote forwarding update failed for {$type} {$uuid}; an existing listener or host process may own one of the requested ports. The previous managed configuration was restored where available. {$exception->getMessage()}", previous: $exception);
+        }
     }
 
     private function remove(Server $server, string $type, string $uuid): void
@@ -118,5 +152,5 @@ class RemoteServerPortForwardService
         $this->run($server, ['if docker inspect '.escapeshellarg($container).' --format '.escapeshellarg('{{ index .Config.Labels "coolify.remote-forward" }}').' 2>/dev/null | grep -qx true; then docker rm -f '.escapeshellarg($container).'; fi', 'if which ufw-docker >/dev/null 2>&1; then ufw-docker delete allow '.escapeshellarg($container).' >/dev/null 2>&1 || true; fi', 'rm -rf '.escapeshellarg($directory)]);
     }
 
-    private function run(Server $server, array $commands): ?string { return instant_remote_process($commands, $server); }
+    protected function run(Server $server, array $commands): ?string { return instant_remote_process($commands, $server); }
 }
