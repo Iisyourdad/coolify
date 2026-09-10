@@ -3,8 +3,8 @@
 namespace App\Actions\Database;
 
 use App\Events\DatabaseProxyStopped;
-use App\Models\ServiceDatabase;
 use App\Models\Server;
+use App\Models\ServiceDatabase;
 use App\Models\StandaloneClickhouse;
 use App\Models\StandaloneDragonfly;
 use App\Models\StandaloneKeydb;
@@ -29,17 +29,17 @@ class StopDatabaseProxy
     {
         $deploymentServer = data_get($database, 'destination.server');
         $uuid = $database->uuid;
-        if ($database->getMorphClass() === \App\Models\ServiceDatabase::class) {
+        if ($database->getMorphClass() === ServiceDatabase::class) {
             $deploymentServer = data_get($database, 'service.destination.server') ?? data_get($database, 'service.server');
         }
         if (! $deploymentServer instanceof Server) {
             return;
         }
 
-        $this->runRemoteCommands(["docker rm -f {$uuid}-proxy"], $deploymentServer, false);
+        $this->runRemoteCommands([dockerRemoveCommand("{$uuid}-proxy")], $deploymentServer, false);
         $edgeProxyServer = $this->resolveEdgeProxyServerForTeamId($this->resolveDatabaseTeamId($database));
         if ($edgeProxyServer instanceof Server && $edgeProxyServer->id !== $deploymentServer->id) {
-            $this->runRemoteCommands(["docker rm -f {$uuid}-proxy"], $edgeProxyServer, false);
+            $this->runRemoteCommands([dockerRemoveCommand("{$uuid}-proxy")], $edgeProxyServer, false);
         }
 
         $database->save();

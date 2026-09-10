@@ -3,6 +3,7 @@
 namespace App\Livewire\Project\Application;
 
 use App\Models\Application;
+use App\Models\ApplicationSetting;
 use App\Services\EdgeProxyRemoteRouteService;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Support\Facades\Validator;
@@ -27,12 +28,6 @@ class Advanced extends Component
 
     #[Validate(['boolean'])]
     public bool $isGitShallowCloneEnabled = false;
-
-    #[Validate(['boolean'])]
-    public bool $isPreviewDeploymentsEnabled = false;
-
-    #[Validate(['boolean'])]
-    public bool $isPrDeploymentsPublicEnabled = false;
 
     #[Validate(['boolean'])]
     public bool $isAutoDeployEnabled = true;
@@ -76,6 +71,9 @@ class Advanced extends Component
     #[Validate(['string', 'nullable'])]
     public ?string $customInternalName = null;
 
+    #[Validate(['string', 'nullable', 'max:'.ApplicationSetting::MAX_CONTAINER_NAME_PREFIX_LENGTH])]
+    public ?string $customContainerNamePrefix = null;
+
     #[Validate(['boolean'])]
     public bool $isGzipEnabled = true;
 
@@ -111,8 +109,6 @@ class Advanced extends Component
             $this->application->settings->is_git_submodules_enabled = $this->isGitSubmodulesEnabled;
             $this->application->settings->is_git_lfs_enabled = $this->isGitLfsEnabled;
             $this->application->settings->is_git_shallow_clone_enabled = $this->isGitShallowCloneEnabled;
-            $this->application->settings->is_preview_deployments_enabled = $this->isPreviewDeploymentsEnabled;
-            $this->application->settings->is_pr_deployments_public_enabled = $this->isPrDeploymentsPublicEnabled;
             $this->application->settings->is_auto_deploy_enabled = $this->isAutoDeployEnabled;
             $this->application->settings->is_log_drain_enabled = $this->isLogDrainEnabled;
             $this->application->settings->is_gpu_enabled = $this->isGpuEnabled;
@@ -123,6 +119,7 @@ class Advanced extends Component
             $this->application->settings->is_build_server_enabled = $this->isBuildServerEnabled;
             $this->application->settings->is_consistent_container_name_enabled = $this->isConsistentContainerNameEnabled;
             $this->application->settings->custom_internal_name = $this->customInternalName;
+            $this->application->settings->custom_container_name_prefix = $this->customContainerNamePrefix;
             $this->application->settings->is_gzip_enabled = $this->isGzipEnabled;
             $this->application->settings->is_stripprefix_enabled = $this->isStripprefixEnabled;
             $this->application->settings->is_raw_compose_deployment_enabled = $this->isRawComposeDeploymentEnabled;
@@ -141,8 +138,6 @@ class Advanced extends Component
             $this->isGitSubmodulesEnabled = $this->application->settings->is_git_submodules_enabled;
             $this->isGitLfsEnabled = $this->application->settings->is_git_lfs_enabled;
             $this->isGitShallowCloneEnabled = $this->application->settings->is_git_shallow_clone_enabled ?? false;
-            $this->isPreviewDeploymentsEnabled = $this->application->settings->is_preview_deployments_enabled;
-            $this->isPrDeploymentsPublicEnabled = $this->application->settings->is_pr_deployments_public_enabled ?? false;
             $this->isAutoDeployEnabled = $this->application->settings->is_auto_deploy_enabled;
             $this->isGpuEnabled = $this->application->settings->is_gpu_enabled;
             $this->gpuDriver = $this->application->settings->gpu_driver;
@@ -152,6 +147,7 @@ class Advanced extends Component
             $this->isBuildServerEnabled = $this->application->settings->is_build_server_enabled;
             $this->isConsistentContainerNameEnabled = $this->application->settings->is_consistent_container_name_enabled;
             $this->customInternalName = $this->application->settings->custom_internal_name;
+            $this->customContainerNamePrefix = $this->application->settings->custom_container_name_prefix;
             $this->isRawComposeDeploymentEnabled = $this->application->settings->is_raw_compose_deployment_enabled;
             $this->isConnectToDockerNetworkEnabled = $this->application->settings->connect_to_docker_network;
             $this->excludeFromMasterDomainRouting = $this->application->settings->exclude_from_master_domain_routing;
@@ -311,6 +307,28 @@ class Advanced extends Component
             }
             $this->syncData(true);
             $this->dispatch('success', 'Custom name saved.');
+            $this->dispatch('configurationChanged');
+        } catch (\Throwable $e) {
+            return handleError($e, $this);
+        }
+    }
+
+    public function saveCustomNamePrefix()
+    {
+        try {
+            $this->authorize('update', $this->application);
+
+            $this->customContainerNamePrefix = str($this->customContainerNamePrefix)->slug()->value() ?: null;
+
+            if ($this->customContainerNamePrefix && ApplicationSetting::isContainerNamePrefixInUse($this->customContainerNamePrefix, $this->application->destination->server, $this->application->id)) {
+                $this->customContainerNamePrefix = $this->application->settings->custom_container_name_prefix;
+                $this->dispatch('error', 'This container name prefix is already in use by another application on this Coolify instance.');
+
+                return;
+            }
+
+            $this->syncData(true);
+            $this->dispatch('success', 'Container name prefix saved.');
             $this->dispatch('configurationChanged');
         } catch (\Throwable $e) {
             return handleError($e, $this);

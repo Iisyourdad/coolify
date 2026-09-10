@@ -2,7 +2,6 @@
 
 namespace App\Livewire\Server;
 
-use App\Actions\Server\StartSentinel;
 use App\Actions\Server\StopSentinel;
 use App\Enums\ProxyTypes;
 use App\Events\ServerReachabilityChanged;
@@ -75,8 +74,6 @@ class Show extends Component
     public int $sentinelPushIntervalSeconds;
 
     public ?string $sentinelCustomUrl = null;
-
-    public bool $isSentinelEnabled;
 
     public bool $isSentinelDebugEnabled;
 
@@ -171,7 +168,6 @@ class Show extends Component
             'sentinelMetricsHistoryDays' => 'required|integer|min:1',
             'sentinelPushIntervalSeconds' => 'required|integer|min:10',
             'sentinelCustomUrl' => 'nullable|url',
-            'isSentinelEnabled' => 'required',
             'isSentinelDebugEnabled' => 'required',
             'serverTimezone' => 'required',
         ];
@@ -277,7 +273,6 @@ class Show extends Component
             $this->server->settings->sentinel_metrics_history_days = $this->sentinelMetricsHistoryDays;
             $this->server->settings->sentinel_push_interval_seconds = $this->sentinelPushIntervalSeconds;
             $this->server->settings->sentinel_custom_url = $this->sentinelCustomUrl;
-            $this->server->settings->is_sentinel_enabled = $this->isSentinelEnabled;
             $this->server->settings->is_sentinel_debug_enabled = $this->isSentinelDebugEnabled;
 
             if (! validate_timezone($this->serverTimezone)) {
@@ -309,7 +304,6 @@ class Show extends Component
             $this->sentinelMetricsHistoryDays = $this->server->settings->sentinel_metrics_history_days;
             $this->sentinelPushIntervalSeconds = $this->server->settings->sentinel_push_interval_seconds;
             $this->sentinelCustomUrl = $this->server->settings->sentinel_custom_url;
-            $this->isSentinelEnabled = $this->server->settings->is_sentinel_enabled;
             $this->isSentinelDebugEnabled = $this->server->settings->is_sentinel_debug_enabled;
             $this->sentinelUpdatedAt = $this->server->sentinel_updated_at;
             $this->serverTimezone = $this->server->settings->server_timezone;
@@ -446,10 +440,10 @@ class Show extends Component
 
                 return;
             }
-            if ($value === true && $this->isSentinelEnabled) {
-                $this->isSentinelEnabled = false;
+            if ($value === true && $this->server->isSentinelEnabled()) {
                 $this->isMetricsEnabled = false;
                 $this->isSentinelDebugEnabled = false;
+                $this->server->settings->is_sentinel_enabled = false;
                 StopSentinel::dispatch($this->server);
                 $this->dispatch('info', 'Sentinel has been disabled as build servers cannot run Sentinel.');
             }
@@ -480,30 +474,6 @@ class Show extends Component
                 return;
             }
 
-            $this->submit();
-        } catch (\Throwable $e) {
-            return handleError($e, $this);
-        }
-    }
-
-    public function updatedIsSentinelEnabled($value)
-    {
-        try {
-            $this->authorize('manageSentinel', $this->server);
-            if ($value === true) {
-                if ($this->isBuildServer) {
-                    $this->isSentinelEnabled = false;
-                    $this->dispatch('error', 'Sentinel cannot be enabled on build servers.');
-
-                    return;
-                }
-                $customImage = isDev() ? $this->sentinelCustomDockerImage : null;
-                StartSentinel::run($this->server, true, null, $customImage);
-            } else {
-                $this->isMetricsEnabled = false;
-                $this->isSentinelDebugEnabled = false;
-                StopSentinel::dispatch($this->server);
-            }
             $this->submit();
         } catch (\Throwable $e) {
             return handleError($e, $this);

@@ -2,15 +2,16 @@
 
 use App\Actions\Database\StartDatabaseProxy;
 use App\Actions\Database\StopDatabaseProxy;
-use App\Models\ServiceDatabase;
 use App\Models\Server;
+use App\Models\ServiceDatabase;
 use App\Models\StandalonePostgresql;
+use App\Models\StandaloneRedis;
 
 it('runs standalone database proxy on the master domain router server for remote deployments', function () {
-    $edgeServer = \Mockery::mock(Server::class)->makePartial();
+    $edgeServer = Mockery::mock(Server::class)->makePartial();
     $edgeServer->id = 1;
 
-    $deploymentServer = \Mockery::mock(Server::class)->makePartial();
+    $deploymentServer = Mockery::mock(Server::class)->makePartial();
     $deploymentServer->id = 2;
     $deploymentServer->ip = '10.8.0.15';
     $deploymentServer->proxy = ['type' => 'NONE'];
@@ -74,10 +75,10 @@ it('runs standalone database proxy on the master domain router server for remote
 });
 
 it('keeps configurable database proxy timeout when routing through the master domain router server', function () {
-    $edgeServer = \Mockery::mock(Server::class)->makePartial();
+    $edgeServer = Mockery::mock(Server::class)->makePartial();
     $edgeServer->id = 3;
 
-    $deploymentServer = \Mockery::mock(Server::class)->makePartial();
+    $deploymentServer = Mockery::mock(Server::class)->makePartial();
     $deploymentServer->id = 4;
     $deploymentServer->ip = '10.8.0.44';
     $deploymentServer->proxy = ['type' => 'NONE'];
@@ -133,7 +134,7 @@ it('keeps configurable database proxy timeout when routing through the master do
 });
 
 it('keeps standalone database proxy on deployment server when no master domain router server is configured', function () {
-    $deploymentServer = \Mockery::mock(Server::class)->makePartial();
+    $deploymentServer = Mockery::mock(Server::class)->makePartial();
     $deploymentServer->id = 2;
     $deploymentServer->ip = '10.8.0.25';
     $deploymentServer->proxy = ['type' => 'NONE'];
@@ -193,19 +194,19 @@ it('keeps standalone database proxy on deployment server when no master domain r
 });
 
 it('runs service database proxy on master domain router server for remote deployments', function () {
-    $edgeServer = \Mockery::mock(Server::class)->makePartial();
+    $edgeServer = Mockery::mock(Server::class)->makePartial();
     $edgeServer->id = 11;
 
-    $deploymentServer = \Mockery::mock(Server::class)->makePartial();
+    $deploymentServer = Mockery::mock(Server::class)->makePartial();
     $deploymentServer->id = 22;
     $deploymentServer->ip = '10.8.0.35';
     $deploymentServer->proxy = ['type' => 'NONE'];
 
-    $serviceDatabase = \Mockery::mock(ServiceDatabase::class)->makePartial();
+    $serviceDatabase = Mockery::mock(ServiceDatabase::class)->makePartial();
     $serviceDatabase->uuid = 'service-db-uuid';
     $serviceDatabase->name = 'postgres';
     $serviceDatabase->public_port = 15434;
-    $serviceDatabase->shouldReceive('getMorphClass')->andReturn(\App\Models\ServiceDatabase::class);
+    $serviceDatabase->shouldReceive('getMorphClass')->andReturn(ServiceDatabase::class);
     $serviceDatabase->shouldReceive('databaseType')->andReturn('standalone-postgresql');
     $serviceDatabase->setRelation('service', (object) [
         'uuid' => 'service-uuid',
@@ -256,13 +257,13 @@ it('runs service database proxy on master domain router server for remote deploy
 });
 
 it('stops database proxy containers on deployment and master domain router servers', function () {
-    $edgeServer = \Mockery::mock(Server::class)->makePartial();
+    $edgeServer = Mockery::mock(Server::class)->makePartial();
     $edgeServer->id = 101;
 
-    $deploymentServer = \Mockery::mock(Server::class)->makePartial();
+    $deploymentServer = Mockery::mock(Server::class)->makePartial();
     $deploymentServer->id = 202;
 
-    $database = \Mockery::mock(StandalonePostgresql::class)->makePartial();
+    $database = Mockery::mock(StandalonePostgresql::class)->makePartial();
     $database->uuid = 'stopped-db-uuid';
     $database->shouldReceive('save')->once()->andReturnTrue();
     $database->setRelation('destination', (object) [
@@ -305,15 +306,15 @@ it('stops database proxy containers on deployment and master domain router serve
     expect($action->calls)->toHaveCount(2)
         ->and($action->calls[0]['server_id'])->toBe(202)
         ->and($action->calls[1]['server_id'])->toBe(101)
-        ->and($action->calls[0]['commands'][0])->toBe('docker rm -f stopped-db-uuid-proxy')
-        ->and($action->calls[1]['commands'][0])->toBe('docker rm -f stopped-db-uuid-proxy');
+        ->and($action->calls[0]['commands'][0])->toBe(dockerRemoveCommand('stopped-db-uuid-proxy'))
+        ->and($action->calls[1]['commands'][0])->toBe(dockerRemoveCommand('stopped-db-uuid-proxy'));
 });
 
 it('falls back to deployment server when master domain router exists but remote host is missing', function () {
-    $edgeServer = \Mockery::mock(Server::class)->makePartial();
+    $edgeServer = Mockery::mock(Server::class)->makePartial();
     $edgeServer->id = 41;
 
-    $deploymentServer = \Mockery::mock(Server::class)->makePartial();
+    $deploymentServer = Mockery::mock(Server::class)->makePartial();
     $deploymentServer->id = 42;
     $deploymentServer->ip = '';
     $deploymentServer->proxy = ['type' => 'NONE'];
@@ -333,6 +334,7 @@ it('falls back to deployment server when master domain router exists but remote 
     $action = new class($edgeServer) extends StartDatabaseProxy
     {
         public array $calls = [];
+
         public array $warnings = [];
 
         public function __construct(private ?Server $edgeServer) {}
@@ -374,7 +376,7 @@ it('falls back to deployment server when master domain router exists but remote 
 });
 
 it('keeps proxy on deployment server when master router server is the same server', function () {
-    $deploymentServer = \Mockery::mock(Server::class)->makePartial();
+    $deploymentServer = Mockery::mock(Server::class)->makePartial();
     $deploymentServer->id = 51;
     $deploymentServer->ip = '10.8.0.51';
     $deploymentServer->proxy = ['type' => 'NONE'];
@@ -427,16 +429,16 @@ it('keeps proxy on deployment server when master router server is the same serve
 });
 
 it('supports service database deployment server fallback from service.server when destination is missing', function () {
-    $deploymentServer = \Mockery::mock(Server::class)->makePartial();
+    $deploymentServer = Mockery::mock(Server::class)->makePartial();
     $deploymentServer->id = 61;
     $deploymentServer->ip = '10.8.0.61';
     $deploymentServer->proxy = ['type' => 'NONE'];
 
-    $serviceDatabase = \Mockery::mock(ServiceDatabase::class)->makePartial();
+    $serviceDatabase = Mockery::mock(ServiceDatabase::class)->makePartial();
     $serviceDatabase->uuid = 'service-db-fallback-server-uuid';
     $serviceDatabase->name = 'postgres';
     $serviceDatabase->public_port = 15461;
-    $serviceDatabase->shouldReceive('getMorphClass')->andReturn(\App\Models\ServiceDatabase::class);
+    $serviceDatabase->shouldReceive('getMorphClass')->andReturn(ServiceDatabase::class);
     $serviceDatabase->shouldReceive('databaseType')->andReturn('standalone-postgresql');
     $serviceDatabase->setRelation('service', (object) [
         'uuid' => 'service-fallback-uuid',
@@ -503,15 +505,15 @@ it('uses the dev host configuration path only for the bind mount source', functi
 });
 
 it('uses ssl internal redis port 6380 for remote database proxy upstream target', function () {
-    $edgeServer = \Mockery::mock(Server::class)->makePartial();
+    $edgeServer = Mockery::mock(Server::class)->makePartial();
     $edgeServer->id = 71;
 
-    $deploymentServer = \Mockery::mock(Server::class)->makePartial();
+    $deploymentServer = Mockery::mock(Server::class)->makePartial();
     $deploymentServer->id = 72;
     $deploymentServer->ip = '10.8.0.72';
     $deploymentServer->proxy = ['type' => 'NONE'];
 
-    $database = \Mockery::mock(\App\Models\StandaloneRedis::class)->makePartial();
+    $database = Mockery::mock(StandaloneRedis::class)->makePartial();
     $database->uuid = 'redis-ssl-db-uuid';
     $database->name = 'redis-ssl-db';
     $database->public_port = 16379;
@@ -563,12 +565,12 @@ it('uses ssl internal redis port 6380 for remote database proxy upstream target'
 });
 
 it('disables public database proxy on non-transient startup errors', function () {
-    $deploymentServer = \Mockery::mock(Server::class)->makePartial();
+    $deploymentServer = Mockery::mock(Server::class)->makePartial();
     $deploymentServer->id = 81;
     $deploymentServer->ip = '10.8.0.81';
     $deploymentServer->proxy = ['type' => 'NONE'];
 
-    $database = \Mockery::mock(StandalonePostgresql::class)->makePartial();
+    $database = Mockery::mock(StandalonePostgresql::class)->makePartial();
     $database->uuid = 'standalone-db-error-uuid';
     $database->name = 'standalone-db-error';
     $database->public_port = 15481;
@@ -594,7 +596,7 @@ it('disables public database proxy on non-transient startup errors', function ()
             ];
 
             if (str_contains(implode("\n", $commands), 'up -d')) {
-                throw new \RuntimeException('Bind for 0.0.0.0:15481 failed: port is already allocated');
+                throw new RuntimeException('Bind for 0.0.0.0:15481 failed: port is already allocated');
             }
 
             return null;
@@ -618,7 +620,7 @@ it('disables public database proxy on non-transient startup errors', function ()
 });
 
 it('does not try to stop database proxy when deployment server is missing', function () {
-    $database = \Mockery::mock(StandalonePostgresql::class)->makePartial();
+    $database = Mockery::mock(StandalonePostgresql::class)->makePartial();
     $database->uuid = 'stop-missing-server-db-uuid';
     $database->setRelation('destination', (object) [
         'server' => null,
@@ -651,10 +653,10 @@ it('does not try to stop database proxy when deployment server is missing', func
 });
 
 it('stops proxy only once when edge and deployment server are the same', function () {
-    $deploymentServer = \Mockery::mock(Server::class)->makePartial();
+    $deploymentServer = Mockery::mock(Server::class)->makePartial();
     $deploymentServer->id = 91;
 
-    $database = \Mockery::mock(StandalonePostgresql::class)->makePartial();
+    $database = Mockery::mock(StandalonePostgresql::class)->makePartial();
     $database->uuid = 'stop-same-edge-db-uuid';
     $database->shouldReceive('save')->once()->andReturnTrue();
     $database->setRelation('destination', (object) [
@@ -696,7 +698,7 @@ it('stops proxy only once when edge and deployment server are the same', functio
 
     expect($action->calls)->toHaveCount(1)
         ->and($action->calls[0]['server_id'])->toBe(91)
-        ->and($action->calls[0]['commands'][0])->toBe('docker rm -f stop-same-edge-db-uuid-proxy');
+        ->and($action->calls[0]['commands'][0])->toBe(dockerRemoveCommand('stop-same-edge-db-uuid-proxy'));
 });
 
 it('skips starting database proxy when deployment server is missing', function () {
@@ -731,10 +733,10 @@ it('skips starting database proxy when deployment server is missing', function (
 });
 
 it('normalizes remote host with scheme and path before building database upstream target', function () {
-    $edgeServer = \Mockery::mock(Server::class)->makePartial();
+    $edgeServer = Mockery::mock(Server::class)->makePartial();
     $edgeServer->id = 111;
 
-    $deploymentServer = \Mockery::mock(Server::class)->makePartial();
+    $deploymentServer = Mockery::mock(Server::class)->makePartial();
     $deploymentServer->id = 112;
     $deploymentServer->ip = '';
     $deploymentServer->proxy = ['type' => 'NONE', 'tunnel_host' => 'https://10.8.0.112:8443/path'];
@@ -789,10 +791,10 @@ it('normalizes remote host with scheme and path before building database upstrea
 });
 
 it('dispatches database proxy stopped event with standalone database team id', function () {
-    $deploymentServer = \Mockery::mock(Server::class)->makePartial();
+    $deploymentServer = Mockery::mock(Server::class)->makePartial();
     $deploymentServer->id = 301;
 
-    $database = \Mockery::mock(StandalonePostgresql::class)->makePartial();
+    $database = Mockery::mock(StandalonePostgresql::class)->makePartial();
     $database->uuid = 'stopped-db-event-uuid';
     $database->shouldReceive('save')->once()->andReturnTrue();
     $database->setRelation('destination', (object) [
@@ -828,10 +830,10 @@ it('dispatches database proxy stopped event with standalone database team id', f
 });
 
 it('dispatches database proxy stopped event with service database team id', function () {
-    $deploymentServer = \Mockery::mock(Server::class)->makePartial();
+    $deploymentServer = Mockery::mock(Server::class)->makePartial();
     $deploymentServer->id = 302;
 
-    $database = \Mockery::mock(ServiceDatabase::class)->makePartial();
+    $database = Mockery::mock(ServiceDatabase::class)->makePartial();
     $database->uuid = 'service-db-event-uuid';
     $database->shouldReceive('getMorphClass')->andReturn(ServiceDatabase::class);
     $database->shouldReceive('save')->once()->andReturnTrue();

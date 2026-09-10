@@ -20,6 +20,14 @@ function countDomains(?string $fqdn): int
         ->count();
 }
 
+function containsWildcardHostname(string $fqdn): bool
+{
+    $url = str_contains($fqdn, '://') ? $fqdn : 'http://'.ltrim($fqdn, '/');
+    $host = parse_url($url, PHP_URL_HOST);
+
+    return is_string($host) && str_contains($host, '*');
+}
+
 function isValidDomainUrl(string $url): bool
 {
     $components = parse_url($url);
@@ -441,6 +449,26 @@ function getComposeServiceDomainString(array|Collection $domains, string $servic
     }
 
     return $matches[0]['domain'];
+}
+
+/**
+ * Determine whether a compose service already has a domain-map entry, including
+ * an explicitly empty entry left when a user removes its generated domain.
+ *
+ * @param  array<string, mixed>|Collection<string, mixed>  $domains
+ */
+function hasComposeServiceDomainEntry(array|Collection $domains, string $serviceName): bool
+{
+    $normalized = normalizeComposeServiceName($serviceName);
+
+    foreach (collect($domains)->keys() as $key) {
+        $key = (string) $key;
+        if ($key === $serviceName || normalizeComposeServiceName($key) === $normalized) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 function composeDomainEntryString(mixed $entry): ?string

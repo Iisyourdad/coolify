@@ -1,3 +1,4 @@
+{{-- Keep this dependency in partial patches that update resource headings. --}}
 <div {{ $attributes->class(['split-action relative']) }} x-data="{ open: false }"
     x-effect="$dispatch('resource-actions-toggled', { open })" @click.outside="open = false"
     @keydown.escape.window="open = false">

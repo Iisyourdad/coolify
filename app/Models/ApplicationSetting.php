@@ -34,6 +34,7 @@ use OpenApi\Attributes as OA;
         'connect_to_docker_network' => ['type' => 'boolean'],
         'exclude_from_master_domain_routing' => ['type' => 'boolean'],
         'custom_internal_name' => ['type' => 'string', 'nullable' => true],
+        'custom_container_name_prefix' => ['type' => 'string', 'nullable' => true],
         'is_container_label_escape_enabled' => ['type' => 'boolean'],
         'is_env_sorting_enabled' => ['type' => 'boolean'],
         'is_container_label_readonly_enabled' => ['type' => 'boolean'],
@@ -55,6 +56,12 @@ class ApplicationSetting extends Model
         'is_force_https_enabled',
         'exclude_from_master_domain_routing',
     ];
+
+    /**
+     * Keeps generated names (prefix, timestamp and for compose apps the service name) well below the
+     * 63 character DNS label limit, with room for a longer suffix in the future.
+     */
+    public const MAX_CONTAINER_NAME_PREFIX_LENGTH = 30;
 
     protected $casts = [
         'is_static' => 'boolean',
@@ -115,6 +122,7 @@ class ApplicationSetting extends Model
         'connect_to_docker_network',
         'exclude_from_master_domain_routing',
         'custom_internal_name',
+        'custom_container_name_prefix',
         'is_container_label_escape_enabled',
         'is_env_sorting_enabled',
         'is_container_label_readonly_enabled',
@@ -141,6 +149,18 @@ class ApplicationSetting extends Model
             if ($application instanceof Application) {
                 SyncApplicationEdgeProxyJob::dispatch($application)->afterCommit();
             }
+        });
+    }
+
+    /**
+     * Like custom container names, a prefix must be unique per server so that uuid, custom container
+     * name and prefix each identify one container when resolving connections.
+     */
+    public static function isContainerNamePrefixInUse(string $prefix, Server $server, ?int $ignoreApplicationId = null): bool
+    {
+        return $server->applications()->contains(function (Application $application) use ($prefix, $ignoreApplicationId) {
+            return $application->id !== $ignoreApplicationId
+                && in_array($prefix, [$application->uuid, $application->settings->custom_container_name_prefix, $application->settings->custom_internal_name], true);
         });
     }
 
