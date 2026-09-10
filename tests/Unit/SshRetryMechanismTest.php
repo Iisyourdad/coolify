@@ -68,6 +68,23 @@ class SshRetryMechanismTest extends TestCase
         );
     }
 
+    public function test_transient_docker_snapshot_errors_are_retryable()
+    {
+        $handler = new class
+        {
+            use SshRetryable;
+
+            public function retryable(string $error): bool
+            {
+                return $this->isRetryableSshError($error);
+            }
+        };
+
+        $this->assertTrue($handler->retryable('failed to commit snapshot: lease does not exist: not found'));
+        $this->assertTrue($handler->retryable('failed to prepare extraction snapshot: parent snapshot does not exist'));
+        $this->assertFalse($handler->retryable('Dockerfile syntax error'));
+    }
+
     public function test_non_ssh_errors_are_not_retryable()
     {
         $handler = new class

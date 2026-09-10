@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Enums\ApplicationDeploymentStatus;
 use App\Enums\BuildPackTypes;
+use App\Jobs\SyncRemoteServerRouteJob;
 use App\Services\ConfigurationGenerator;
 use App\Services\DeploymentConfiguration\ApplicationConfigurationSnapshot;
 use App\Services\DeploymentConfiguration\ConfigurationDiff;
@@ -391,6 +392,11 @@ class Application extends BaseModel
                     'resourceable_type' => Application::class,
                     'resourceable_id' => $application->id,
                 ]);
+            }
+        });
+        static::updated(function (self $application): void {
+            if ($application->wasChanged(['fqdn', 'docker_compose_domains', 'redirect', 'destination_id', 'destination_type'])) {
+                SyncRemoteServerRouteJob::dispatch($application)->afterCommit();
             }
         });
         static::forceDeleting(function ($application) {

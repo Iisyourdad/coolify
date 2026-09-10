@@ -96,6 +96,8 @@ class DeleteResourceJob implements ShouldBeEncrypted, ShouldQueue
             ]);
         }
 
+        $this->queueRemoteRouteCleanup();
+
         try {
             $this->deleteScheduledVolumeBackups();
         } catch (\Throwable $e) {
@@ -139,6 +141,35 @@ class DeleteResourceJob implements ShouldBeEncrypted, ShouldQueue
             || $this->resource instanceof StandaloneKeydb
             || $this->resource instanceof StandaloneDragonfly
             || $this->resource instanceof StandaloneClickhouse;
+    }
+
+    private function queueRemoteRouteCleanup(): void
+    {
+        if (! ($this->resource instanceof Application || $this->resource instanceof Service)) {
+            return;
+        }
+
+        try {
+            $this->resource->loadMissing('environment.project');
+            $teamId = data_get($this->resource, 'environment.project.team_id');
+            if ($teamId === null) {
+                return;
+            }
+
+            // This payload is intentionally independent of the model so local
+            // deletion never waits for an unreachable master routing server.
+            CleanupRemoteServerRouteJob::dispatch(
+                (int) $teamId,
+                $this->resource instanceof Application ? 'application' : 'service',
+                $this->resource->uuid,
+            )->afterCommit();
+        } catch (\Throwable $e) {
+            Log::warning('Could not queue remote route cleanup; local deletion will continue.', [
+                'resource_id' => $this->resource->id,
+                'resource_type' => $this->resource->type(),
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     private function deleteScheduledVolumeBackups(): void

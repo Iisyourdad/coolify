@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Jobs\SyncRemoteServerRouteJob;
 use App\Support\DomainPortOverrides;
 use App\Support\DomainUrlParts;
 use App\Traits\HasNoindexDomains;
@@ -80,6 +81,12 @@ class ServiceApplication extends BaseModel
             if ($service->isDirty('fqdn')) {
                 $service->normalizeDomainPortOverrides();
                 $service->syncNoindexDomains();
+            }
+        });
+        static::updated(function (self $application): void {
+            if ($application->wasChanged(['fqdn', 'noindex_domains', 'redirect', 'is_force_https_enabled'])) {
+                $application->loadMissing('service');
+                SyncRemoteServerRouteJob::dispatch($application->service)->afterCommit();
             }
         });
     }
