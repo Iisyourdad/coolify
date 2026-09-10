@@ -8,6 +8,11 @@ return new class extends Migration
 {
     public function up(): void
     {
+        // Partial patches must carry this schema dependency alongside refreshSession().
+        if (Schema::hasColumn('users', 'current_team_id')) {
+            return;
+        }
+
         Schema::table('users', function (Blueprint $table) {
             // Last active team, restored on login. Nullable: no persisted choice yet.
             // Not a foreign key because team ids include the 0 sentinel and teams can
