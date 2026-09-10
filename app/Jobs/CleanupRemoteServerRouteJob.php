@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Services\RemoteServerRouteService;
+use App\Services\RemoteServerPortForwardService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeEncrypted;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -34,8 +35,9 @@ class CleanupRemoteServerRouteJob implements ShouldBeEncrypted, ShouldQueue
         return [15, 30, 60, 120, 300];
     }
 
-    public function handle(RemoteServerRouteService $routes): void
+    public function handle(RemoteServerRouteService $routes, RemoteServerPortForwardService $forwards): void
     {
         $routes->cleanup($this->teamId, $this->resourceType, $this->resourceUuid);
+        $forwards->cleanup($this->teamId, $this->resourceType, $this->resourceUuid);
     }
 }

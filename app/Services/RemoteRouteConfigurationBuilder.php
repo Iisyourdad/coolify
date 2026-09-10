@@ -50,7 +50,7 @@ class RemoteRouteConfigurationBuilder
                 }
             }
 
-            $httpRouter = ['rule' => $rule, 'entryPoints' => ['http'], 'service' => $service];
+            $httpRouter = ['rule' => $rule, 'entryPoints' => [traefikHttpEntrypoint()], 'service' => $service];
             if ($parts['scheme'] === 'https') {
                 if ($domain['force_https']) {
                     $redirect = "remote-{$key}-redirect-to-https";
@@ -59,9 +59,9 @@ class RemoteRouteConfigurationBuilder
                 }
 
                 $tls = filter_var($parts['host'], FILTER_VALIDATE_IP) === false
-                    ? ['certResolver' => 'letsencrypt']
+                    ? ['certResolver' => traefikPublicCertResolver()]
                     : [];
-                $httpsRouter = ['rule' => $rule, 'entryPoints' => ['https'], 'service' => $service, 'tls' => $tls];
+                $httpsRouter = ['rule' => $rule, 'entryPoints' => [traefikHttpsEntrypoint()], 'service' => $service, 'tls' => $tls];
                 if ($httpsMiddlewares !== []) {
                     $httpsRouter['middlewares'] = $httpsMiddlewares;
                 }

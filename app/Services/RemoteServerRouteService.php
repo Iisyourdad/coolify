@@ -12,16 +12,16 @@ use Symfony\Component\Yaml\Yaml;
 
 class RemoteServerRouteService
 {
-    public function __construct(private RemoteRouteConfigurationBuilder $configurationBuilder) {}
+    public function __construct(private RemoteRouteConfigurationBuilder $configurationBuilder, private RemoteServerTargetResolver $targets) {}
 
-    public function syncApplication(Application $application): void
+    public function syncApplication(Application $application, ?Server $deploymentServer = null): void
     {
         $application->loadMissing('environment.project', 'destination.server', 'settings');
         $this->sync(
             teamId: data_get($application, 'environment.project.team_id'),
             resourceType: 'application',
             resourceUuid: $application->uuid,
-            deploymentServer: data_get($application, 'destination.server'),
+            deploymentServer: $deploymentServer ?? data_get($application, 'destination.server'),
             domains: $this->applicationDomains($application),
         );
     }
@@ -52,10 +52,7 @@ class RemoteServerRouteService
             return;
         }
 
-        $master = Server::query()
-            ->where('team_id', $teamId)
-            ->whereRelation('settings', 'is_master_domain_router_enabled', true)
-            ->first();
+        $master = $this->targets->masterForTeam($teamId);
 
         if (! $master instanceof Server || $master->id === $deploymentServer->id || $domains === []) {
             $this->cleanup($teamId, $resourceType, $resourceUuid);
@@ -63,7 +60,7 @@ class RemoteServerRouteService
             return;
         }
 
-        $host = $this->remoteHost($deploymentServer);
+        $host = $this->targets->host($deploymentServer);
         if ($host === null) {
             throw new \RuntimeException("Remote {$resourceType} route cannot be synchronized because the deployment server has no reachable host.");
         }
@@ -125,29 +122,6 @@ class RemoteServerRouteService
         return ['domain' => $domain, 'noindex' => $noindex, 'redirect' => $redirect, 'force_https' => $forceHttps];
     }
 
-    private function remoteHost(Server $server): ?string
-    {
-        foreach (['wireguard_ip', 'wg_ip', 'tunnel_ip', 'tunnel_host', 'tunnel_domain'] as $key) {
-            $candidate = trim((string) data_get($server, "proxy.{$key}"));
-            if ($candidate !== '') {
-                return $this->normalizeHost($candidate);
-            }
-        }
-
-        return $this->normalizeHost((string) $server->ip);
-    }
-
-    private function normalizeHost(string $host): ?string
-    {
-        $host = trim($host);
-        if ($host === '') {
-            return null;
-        }
-        $parsed = parse_url(str_contains($host, '://') ? $host : 'http://'.$host, PHP_URL_HOST);
-        $host = is_string($parsed) ? trim($parsed, '[]') : '';
-
-        return $host === '' ? null : (filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) ? "[{$host}]" : $host);
-    }
 
     private function writeRouteFile(Server $server, string $resourceType, string $resourceUuid, array $configuration): void
     {

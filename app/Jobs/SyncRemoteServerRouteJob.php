@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Models\Application;
 use App\Models\Service;
 use App\Services\RemoteServerRouteService;
+use App\Services\RemoteServerPortForwardService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeEncrypted;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -21,7 +22,7 @@ class SyncRemoteServerRouteJob implements ShouldBeEncrypted, ShouldQueue
 
     public $timeout = 120;
 
-    public function __construct(public Application|Service $resource)
+    public function __construct(public Application|Service $resource, public ?int $deploymentServerId = null)
     {
         $this->onQueue('high');
     }
@@ -36,14 +37,25 @@ class SyncRemoteServerRouteJob implements ShouldBeEncrypted, ShouldQueue
         return [5, 15, 30, 60];
     }
 
-    public function handle(RemoteServerRouteService $routes): void
+    public function handle(RemoteServerRouteService $routes, RemoteServerPortForwardService $forwards): void
     {
         if ($this->resource instanceof Application) {
-            $routes->syncApplication($this->resource);
+            $server = $this->validatedApplicationDeploymentServer($this->resource);
+            $routes->syncApplication($this->resource, $server);
+            $forwards->syncApplication($this->resource, $server);
 
             return;
         }
 
         $routes->syncService($this->resource);
+        $forwards->syncService($this->resource);
+    }
+
+    private function validatedApplicationDeploymentServer(Application $application): ?\App\Models\Server
+    {
+        if ($this->deploymentServerId === null) return null;
+        $application->loadMissing('destination.server', 'additional_servers');
+        $allowed = collect([$application->destination?->server])->merge($application->additional_servers);
+        return $allowed->first(fn ($server) => $server?->id === $this->deploymentServerId);
     }
 }

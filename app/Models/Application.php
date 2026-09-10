@@ -395,7 +395,7 @@ class Application extends BaseModel
             }
         });
         static::updated(function (self $application): void {
-            if ($application->wasChanged(['fqdn', 'docker_compose_domains', 'redirect', 'destination_id', 'destination_type'])) {
+            if ($application->wasChanged(['fqdn', 'docker_compose_domains', 'docker_compose_raw', 'ports_mappings', 'redirect', 'destination_id', 'destination_type'])) {
                 SyncRemoteServerRouteJob::dispatch($application)->afterCommit();
             }
         });
