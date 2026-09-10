@@ -6,6 +6,7 @@ use App\Actions\Server\StopSentinel;
 use App\Events\ServerReachabilityChanged;
 use App\Models\CloudProviderToken;
 use App\Models\Server;
+use App\Models\ServerSetting;
 use App\Rules\ValidServerIp;
 use App\Services\DigitalOceanService;
 use App\Services\HetznerService;
@@ -48,6 +49,8 @@ class Show extends Component
     public bool $isSwarmWorker;
 
     public bool $isBuildServer;
+
+    public bool $isMasterDomainRouterEnabled;
 
     #[Locked]
     public bool $isBuildServerLocked = false;
@@ -151,6 +154,7 @@ class Show extends Component
             'isSwarmManager' => 'required',
             'isSwarmWorker' => 'required',
             'isBuildServer' => 'required',
+            'isMasterDomainRouterEnabled' => 'required',
             'isMetricsEnabled' => 'required',
             'sentinelToken' => 'required',
             'sentinelUpdatedAt' => 'nullable',
@@ -255,6 +259,7 @@ class Show extends Component
             $this->server->settings->wildcard_domain = $this->wildcardDomain;
             $this->server->settings->is_swarm_worker = $this->isSwarmWorker;
             $this->server->settings->is_build_server = $this->isBuildServer;
+            $wasMasterDomainRouterEnabled = $this->server->settings->is_master_domain_router_enabled;
             $this->server->settings->is_metrics_enabled = $this->isMetricsEnabled;
             $this->server->settings->sentinel_token = $this->sentinelToken;
             $this->server->settings->sentinel_metrics_refresh_rate_seconds = $this->sentinelMetricsRefreshRateSeconds;
@@ -271,6 +276,15 @@ class Show extends Component
             }
 
             $this->server->settings->save();
+
+            if ($this->isMasterDomainRouterEnabled !== $wasMasterDomainRouterEnabled) {
+                $freshServer = $this->server->fresh('settings');
+                if ($this->isMasterDomainRouterEnabled) {
+                    ServerSetting::enableMasterDomainRouter($freshServer);
+                } else {
+                    ServerSetting::disableMasterDomainRouter($freshServer);
+                }
+            }
         } else {
             $this->name = $this->server->name;
             $this->description = $this->server->description;
@@ -285,6 +299,7 @@ class Show extends Component
             $this->isSwarmManager = $this->server->settings->is_swarm_manager;
             $this->isSwarmWorker = $this->server->settings->is_swarm_worker;
             $this->isBuildServer = $this->server->settings->is_build_server;
+            $this->isMasterDomainRouterEnabled = $this->server->settings->is_master_domain_router_enabled;
             $this->isMetricsEnabled = $this->server->settings->is_metrics_enabled;
             $this->sentinelToken = $this->server->settings->sentinel_token;
             $this->sentinelMetricsRefreshRateSeconds = $this->server->settings->sentinel_metrics_refresh_rate_seconds;

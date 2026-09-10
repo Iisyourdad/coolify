@@ -270,6 +270,13 @@
                                         :disabled="$isValidating" />
                                 @endif
                             </div>
+
+                            <div class="mt-4 border-t border-neutral-200 pt-4 dark:border-white/[0.08]">
+                                <x-forms.checkbox canGate="update" :canResource="$server"
+                                    id="isMasterDomainRouterEnabled" label="Use as the master domain router"
+                                    helper="Receives public domains for resources hosted on other servers in this team. Requires Traefik and cannot be enabled on a build server."
+                                    :disabled="$isValidating || $isBuildServer || $server->proxyType() !== 'TRAEFIK'" />
+                            </div>
                         @endif
                     </x-application.settings-section>
 
