@@ -2,6 +2,7 @@
 
 namespace App\Actions\Service;
 
+use App\Jobs\SyncRemoteServerRouteJob;
 use App\Models\Service;
 use Lorisleiva\Actions\Concerns\AsAction;
 use Lorisleiva\Actions\Decorators\JobDecorator;
@@ -53,7 +54,10 @@ class StartService
         }
         $commands = array_merge($commands, $this->logDrainNetworkConnectCommands($service));
 
-        return remote_process($commands, $service->server, type_uuid: $service->uuid, callEventOnFinish: 'ServiceStatusChanged');
+        $activity = remote_process($commands, $service->server, type_uuid: $service->uuid, callEventOnFinish: 'ServiceStatusChanged');
+        SyncRemoteServerRouteJob::dispatch($service)->afterCommit();
+
+        return $activity;
     }
 
     private function logDrainNetworkConnectCommands(Service $service): array

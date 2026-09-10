@@ -547,6 +547,16 @@ class ApplicationDeploymentJob implements ShouldBeEncrypted, ShouldQueue
             \Log::warning('Failed to dispatch GetContainersStatus for deployment '.$this->deployment_uuid.': '.$e->getMessage());
         }
 
+        if ($this->pull_request_id === 0) {
+            try {
+                // Preserve the completed deployment server: an application may run on
+                // an associated additional server rather than its primary destination.
+                SyncRemoteServerRouteJob::dispatch($this->application, $this->server->id)->afterCommit();
+            } catch (Exception $e) {
+                \Log::warning('Failed to queue remote route synchronization for deployment '.$this->deployment_uuid.': '.$e->getMessage());
+            }
+        }
+
         if ($this->pull_request_id !== 0) {
             if ($this->application->is_github_based()) {
                 try {

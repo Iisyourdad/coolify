@@ -650,6 +650,7 @@ CREATE TABLE IF NOT EXISTS "server_settings" (
     "updated_at" TEXT,
     "wildcard_domain" TEXT,
     "is_cloudflare_tunnel" INTEGER DEFAULT false NOT NULL,
+    "is_master_domain_router_enabled" INTEGER DEFAULT false NOT NULL,
     "is_logdrain_newrelic_enabled" INTEGER DEFAULT false NOT NULL,
     "logdrain_newrelic_license_key" TEXT,
     "logdrain_newrelic_base_uri" TEXT,

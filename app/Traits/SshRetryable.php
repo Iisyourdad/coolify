@@ -41,6 +41,12 @@ trait SshRetryable
             'Authentication failed',
             'Too many authentication failures',
             'SSH command failed with exit code: 255',
+            // Docker/containerd image extraction can transiently lose a snapshot
+            // lease. Keep this narrow so ordinary deployment failures still fail.
+            'failed to commit snapshot',
+            'failed to prepare extraction snapshot',
+            'lease does not exist',
+            'parent snapshot does not exist',
         ];
 
         $lowerErrorOutput = strtolower($errorOutput);
