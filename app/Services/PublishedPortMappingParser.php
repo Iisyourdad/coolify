@@ -63,9 +63,9 @@ class PublishedPortMappingParser
     private function port(mixed $value, array $environment): ?int
     {
         $value = trim((string) $value);
-        if (preg_match('/^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$/', $value, $match)) {
-            $value = trim((string) ($environment[$match[1]] ?? ''));
-        } elseif (preg_match('/^\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-[^}]*)?}$/', $value, $match)) {
+        if (preg_match('/^\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-(\d+))?}$/', $value, $match)) {
+            $value = trim((string) ($environment[$match[1]] ?? ($match[2] ?? '')));
+        } elseif (preg_match('/^\$([A-Za-z_][A-Za-z0-9_]*)$/', $value, $match)) {
             $value = trim((string) ($environment[$match[1]] ?? ''));
         }
         if (! ctype_digit($value)) {
