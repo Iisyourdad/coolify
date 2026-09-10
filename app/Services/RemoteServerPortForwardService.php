@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Exceptions\RemotePortForwardingConflictException;
 use App\Models\Application;
 use App\Models\Server;
 use App\Models\Service;
@@ -131,7 +132,7 @@ class RemoteServerPortForwardService
             if (! str_contains($line, '->')) continue;
             foreach ($wanted as $mapping) {
                 if (str_contains($line, ":{$mapping['published']}->") && str_contains($line, "/{$mapping['protocol']}") && ! str_contains($line, " {$type} {$uuid} ")) {
-                    throw new \RuntimeException("Remote forwarding conflict: {$mapping['protocol']}/{$mapping['published']} is owned by another managed resource on the master server.");
+                    throw new RemotePortForwardingConflictException("Remote forwarding conflict: {$mapping['protocol']}/{$mapping['published']} is owned by another managed resource on the master server.");
                 }
             }
         }
@@ -171,7 +172,10 @@ class RemoteServerPortForwardService
         try {
             $this->run($master, $commands);
         } catch (\Throwable $exception) {
-            throw new \RuntimeException("Remote forwarding update failed for {$type} {$uuid}; an existing listener or host process may own one of the requested ports. The previous managed configuration was restored where available. {$exception->getMessage()}", previous: $exception);
+            if (str($exception->getMessage())->lower()->contains(['port is already allocated', 'address already in use', 'failed programming external connectivity'])) {
+                throw new RemotePortForwardingConflictException("Remote forwarding update failed for {$type} {$uuid}; an existing listener or host process owns one of the requested ports. The previous managed configuration was restored where available. {$exception->getMessage()}", previous: $exception);
+            }
+            throw $exception;
         }
     }
 
