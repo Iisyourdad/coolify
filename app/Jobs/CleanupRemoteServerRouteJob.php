@@ -22,7 +22,7 @@ class CleanupRemoteServerRouteJob implements ShouldBeEncrypted, ShouldQueue
 
     public function __construct(public int $teamId, public string $resourceType, public string $resourceUuid)
     {
-        $this->onQueue('high');
+        $this->onQueue('default');
     }
 
     public function middleware(): array

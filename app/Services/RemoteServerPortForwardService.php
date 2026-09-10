@@ -32,7 +32,17 @@ class RemoteServerPortForwardService
 
     public function cleanup(int $teamId, string $type, string $uuid): void
     {
-        Server::query()->where('team_id', $teamId)->each(fn (Server $server) => $this->remove($server, $type, $uuid));
+        $errors = [];
+        Server::query()->where('team_id', $teamId)->each(function (Server $server) use ($type, $uuid, &$errors): void {
+            try {
+                $this->remove($server, $type, $uuid);
+            } catch (\Throwable $exception) {
+                $errors[] = "{$server->name}: {$exception->getMessage()}";
+            }
+        });
+        if ($errors !== []) {
+            throw new \RuntimeException('Remote forwarder cleanup remains pending on: '.implode('; ', $errors));
+        }
     }
 
     private function sync(?int $teamId, string $type, string $uuid, mixed $deploymentServer, Collection $mappings): void
@@ -40,7 +50,7 @@ class RemoteServerPortForwardService
         if ($teamId === null || ! $deploymentServer instanceof Server) return;
         $master = $this->targets->masterForTeam($teamId);
         if (! $master instanceof Server || $master->id === $deploymentServer->id || $mappings->isEmpty()) {
-            $this->cleanup($teamId, $type, $uuid); return;
+            $this->cleanupReachable($teamId, $type, $uuid); return;
         }
         [$mappings, $warnings] = $this->withoutReserved($master, $type, $uuid, $mappings);
         foreach ($warnings as $warning) {
@@ -56,7 +66,27 @@ class RemoteServerPortForwardService
         // Do not tear down a former master until the new master's forwarder was
         // successfully recreated.
         Server::query()->where('team_id', $teamId)->where('id', '!=', $master->id)
-            ->each(fn (Server $server) => $this->remove($server, $type, $uuid));
+            ->whereRelation('settings', 'is_reachable', true)
+            ->each(fn (Server $server) => $this->tryRemove($server, $type, $uuid));
+    }
+
+    private function cleanupReachable(int $teamId, string $type, string $uuid): void
+    {
+        Server::query()->where('team_id', $teamId)
+            ->whereRelation('settings', 'is_reachable', true)
+            ->each(fn (Server $server) => $this->tryRemove($server, $type, $uuid));
+    }
+
+    private function tryRemove(Server $server, string $type, string $uuid): void
+    {
+        try {
+            $this->remove($server, $type, $uuid);
+        } catch (\Throwable $exception) {
+            Log::warning('Deferred remote forwarder cleanup after routine synchronization.', [
+                'server_id' => $server->id, 'resource_type' => $type,
+                'resource_uuid' => $uuid, 'error' => $exception->getMessage(),
+            ]);
+        }
     }
 
     private function applicationPorts(Application $application): Collection

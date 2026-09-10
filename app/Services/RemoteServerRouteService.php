@@ -7,6 +7,7 @@ use App\Models\Application;
 use App\Models\Server;
 use App\Models\Service;
 use App\Models\ServiceApplication;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Symfony\Component\Yaml\Yaml;
 
@@ -40,10 +41,20 @@ class RemoteServerRouteService
 
     public function cleanup(int $teamId, string $resourceType, string $resourceUuid): void
     {
+        $errors = [];
         Server::query()
             ->where('team_id', $teamId)
             ->whereProxyType(ProxyTypes::TRAEFIK->value)
-            ->each(fn (Server $server) => $this->deleteRouteFile($server, $resourceType, $resourceUuid));
+            ->each(function (Server $server) use ($resourceType, $resourceUuid, &$errors): void {
+                try {
+                    $this->deleteRouteFile($server, $resourceType, $resourceUuid);
+                } catch (\Throwable $exception) {
+                    $errors[] = "{$server->name}: {$exception->getMessage()}";
+                }
+            });
+        if ($errors !== []) {
+            throw new \RuntimeException('Remote route cleanup remains pending on: '.implode('; ', $errors));
+        }
     }
 
     private function sync(?int $teamId, string $resourceType, string $resourceUuid, mixed $deploymentServer, array $domains): void
@@ -55,7 +66,7 @@ class RemoteServerRouteService
         $master = $this->targets->masterForTeam($teamId);
 
         if (! $master instanceof Server || $master->id === $deploymentServer->id || $domains === []) {
-            $this->cleanup($teamId, $resourceType, $resourceUuid);
+            $this->cleanupReachable($teamId, $resourceType, $resourceUuid);
 
             return;
         }
@@ -67,7 +78,7 @@ class RemoteServerRouteService
 
         $configuration = $this->configurationBuilder->build($resourceType, $resourceUuid, $host, $domains);
         if ($configuration['http']['routers'] === []) {
-            $this->cleanup($teamId, $resourceType, $resourceUuid);
+            $this->cleanupReachable($teamId, $resourceType, $resourceUuid);
 
             return;
         }
@@ -77,7 +88,28 @@ class RemoteServerRouteService
             ->where('team_id', $teamId)
             ->where('id', '!=', $master->id)
             ->whereProxyType(ProxyTypes::TRAEFIK->value)
-            ->each(fn (Server $server) => $this->deleteRouteFile($server, $resourceType, $resourceUuid));
+            ->whereRelation('settings', 'is_reachable', true)
+            ->each(fn (Server $server) => $this->tryDeleteRouteFile($server, $resourceType, $resourceUuid));
+    }
+
+    private function cleanupReachable(int $teamId, string $resourceType, string $resourceUuid): void
+    {
+        Server::query()->where('team_id', $teamId)
+            ->whereProxyType(ProxyTypes::TRAEFIK->value)
+            ->whereRelation('settings', 'is_reachable', true)
+            ->each(fn (Server $server) => $this->tryDeleteRouteFile($server, $resourceType, $resourceUuid));
+    }
+
+    private function tryDeleteRouteFile(Server $server, string $resourceType, string $resourceUuid): void
+    {
+        try {
+            $this->deleteRouteFile($server, $resourceType, $resourceUuid);
+        } catch (\Throwable $exception) {
+            Log::warning('Deferred remote route cleanup after routine synchronization.', [
+                'server_id' => $server->id, 'resource_type' => $resourceType,
+                'resource_uuid' => $resourceUuid, 'error' => $exception->getMessage(),
+            ]);
+        }
     }
 
     /** @return array<int, array{domain: string, noindex: bool, redirect: ?string, force_https: bool}> */

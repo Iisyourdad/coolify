@@ -24,7 +24,7 @@ class SyncRemoteServerRouteJob implements ShouldBeEncrypted, ShouldQueue
 
     public function __construct(public Application|Service $resource, public ?int $deploymentServerId = null)
     {
-        $this->onQueue('high');
+        $this->onQueue('default');
     }
 
     public function middleware(): array

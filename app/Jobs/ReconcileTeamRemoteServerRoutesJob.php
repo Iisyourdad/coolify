@@ -20,7 +20,7 @@ class ReconcileTeamRemoteServerRoutesJob implements ShouldBeEncrypted, ShouldQue
 
     public function __construct(public int $teamId)
     {
-        $this->onQueue('high');
+        $this->onQueue('default');
     }
 
     public function backoff(): array
