@@ -1,5 +1,9 @@
-import { initializeCopyButtonComponent } from './copy-button.js';
 import { initializeTerminalComponent } from './terminal.js';
+import { registerLivewireRequestFailureHandler } from './livewire-request-failure.js';
+
+document.addEventListener('livewire:init', () => {
+    registerLivewireRequestFailureHandler(window.Livewire);
+});
 
 // Livewire 3.5.19+ re-applies `x-cloak` to morphed elements during wire:navigate
 // (via replaceHtmlAttributes). With `[x-cloak]{display:none}` on the app wrapper,
@@ -13,7 +17,6 @@ document.addEventListener('livewire:navigated', () => {
 // Keeping this registration independent from the current route also makes it
 // available before Alpine processes terminal markup after wire:navigate.
 document.addEventListener('alpine:init', initializeTerminalComponent);
-document.addEventListener('alpine:init', initializeCopyButtonComponent);
 
 /**
  * Smooth-scroll a settings section into view, then flash its border for 500ms
@@ -121,3 +124,16 @@ window.scrollToSettingsSection = function scrollToSettingsSection(id) {
 
     rafId = window.requestAnimationFrame(tick);
 };
+
+// When a settings sub-section link navigates across pages (href="route#section-id"),
+// scroll to that section once the destination page has rendered.
+function scrollToHashSettingsSection() {
+    const hash = window.location.hash;
+    if (!hash || hash.length < 2) {
+        return;
+    }
+    const id = decodeURIComponent(hash.slice(1));
+    window.requestAnimationFrame(() => window.scrollToSettingsSection?.(id));
+}
+document.addEventListener('livewire:navigated', scrollToHashSettingsSection);
+document.addEventListener('DOMContentLoaded', scrollToHashSettingsSection);

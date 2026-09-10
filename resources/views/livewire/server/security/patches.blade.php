@@ -35,8 +35,8 @@
                 </x-slot:actions>
 
                 <x-callout type="info" title="Supported package managers">
-                    Automated package discovery currently supports apk, apt, dnf, pacman, and zypper. Server package updates are
-                    included in the master update report, which can be managed from
+                    Automated package discovery currently supports apk, apt, dnf, pacman, and zypper. Weekly status
+                    notifications and the master update report can be managed from
                     <a class="font-medium underline" href="{{ route('notifications.email') }}"
                         {{ wireNavigate() }}>notification settings</a>.
                 </x-callout>

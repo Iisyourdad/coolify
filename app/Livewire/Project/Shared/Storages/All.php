@@ -2,6 +2,7 @@
 
 namespace App\Livewire\Project\Shared\Storages;
 
+use App\Livewire\Project\Service\Storage as StorageComponent;
 use App\Models\Application;
 use App\Models\LocalFileVolume;
 use App\Models\LocalPersistentVolume;
@@ -44,7 +45,7 @@ class All extends Component
 
     public bool $deleteDockerVolume = false;
 
-    protected $listeners = ['refreshStorages' => 'refreshList', 'refreshVolumeBackups' => 'refreshList'];
+    protected $listeners = ['refreshVolumeList' => 'refreshList', 'refreshVolumeBackups' => 'refreshList'];
 
     public function mount(): void
     {
@@ -107,25 +108,6 @@ class All extends Component
         $this->submit($storageId);
     }
 
-    public function clearHostPath(int $storageId): void
-    {
-        $this->authorize('update', $this->resource);
-
-        $storage = $this->findStorageOrFail($storageId);
-        if ($storage->shouldBeReadOnlyInUI()) {
-            $this->dispatch('error', 'This volume is read-only.');
-
-            return;
-        }
-
-        $storage->host_path = null;
-        $storage->save();
-        $this->forms[$storageId]['hostPath'] = null;
-
-        $this->dispatch('configurationChanged');
-        $this->dispatch('success', 'Source path removed. Use a directory mount for host directory bindings.');
-    }
-
     /**
      * Livewire listbox onChange cannot pass args; PR suffix fields call this via updatedForms.
      */
@@ -182,7 +164,7 @@ class All extends Component
 
         $storage->delete();
         $this->refreshList();
-        $this->dispatch('refreshStorages');
+        $this->dispatch('storageCountsChanged')->to(StorageComponent::class);
         $this->dispatch('configurationChanged');
 
         return true;

@@ -2,6 +2,7 @@
 
 namespace App\Livewire\Project\Shared\EnvironmentVariable;
 
+use App\Events\ApplicationConfigurationChanged;
 use App\Models\Application;
 use App\Models\Environment;
 use App\Models\EnvironmentVariable as ModelsEnvironmentVariable;
@@ -144,6 +145,8 @@ class Show extends Component
      */
     public function loadValues(): void
     {
+        $this->authorize('update', $this->env);
+
         if ($this->valuesLoaded) {
             return;
         }
@@ -161,23 +164,7 @@ class Show extends Component
         $this->valuesLoaded = true;
     }
 
-    public function copyValue(): ?string
-    {
-        if ($this->env->is_shown_once || (auth()->user()?->isMember() ?? true)) {
-            return null;
-        }
-
-        if (! $this->env instanceof ModelsEnvironmentVariable) {
-            return $this->env->value;
-        }
-
-        return $this->env->get_real_environment_variables_with_server(
-            $this->env->resolveReferencedValue(),
-            $this->env->resourceable,
-        );
-    }
-
-    public function syncData(bool $toModel = false)
+    private function syncData(bool $toModel = false): void
     {
         if ($toModel) {
             $this->key = ValidationPatterns::normalizeEnvironmentVariableKey($this->key);
@@ -220,7 +207,7 @@ class Show extends Component
             $this->is_required = (bool) ($this->env->is_required ?? false);
             // Use the stored column, not the value-based accessor (that decrypts).
             $this->is_shared = (bool) ($this->env->getAttributes()['is_shared'] ?? false);
-            $this->isValueHidden = auth()->user()?->isMember() ?? true;
+            $this->isValueHidden = auth()->user()?->isMember() ?? false;
 
             if ($this->valuesLoaded) {
                 $this->hydrateValueFields();
@@ -247,12 +234,12 @@ class Show extends Component
             $this->is_really_required = $this->is_required && blank($this->value);
         }
 
-        if ($this->env->is_shown_once || (auth()->user()?->isMember() ?? true)) {
+        if ($this->env->is_shown_once || auth()->user()?->isMember()) {
             $this->value = null;
             $this->real_value = null;
         }
 
-        $this->isValueHidden = auth()->user()?->isMember() ?? true;
+        $this->isValueHidden = auth()->user()?->isMember() ?? false;
     }
 
     public function checkEnvs()
@@ -312,8 +299,13 @@ class Show extends Component
             $this->syncData(true);
             $this->syncData(false);
             $this->dispatch('success', 'Environment variable updated.');
+            $this->dispatch('environment-variable-updated', envId: $this->env->id);
             $this->dispatch('envsUpdated');
             $this->dispatch('configurationChanged');
+
+            if ($this->is_required && $this->resource instanceof Service) {
+                event(new ApplicationConfigurationChanged($this->resource->team()->id));
+            }
         } catch (\Exception $e) {
             return handleError($e);
         }

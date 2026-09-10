@@ -1200,7 +1200,6 @@ All notable changes to this project will be documented in this file.
 - *(api)* Improve docker_compose_domains
 - *(api)* Add more allowed fields
 - *(notifications)* Add mattermost notifications (#7963)
-- *(templates)* Add ElectricSQL docker compose template
 - *(service)* Add back soketi-app-manager
 - *(service)* Upgrade checkmate to v3 (#7995)
 - *(service)* Update pterodactyl version (#7981)
@@ -1302,6 +1301,41 @@ All notable changes to this project will be documented in this file.
 - *(storage)* Add storage endpoints and UUID support for databases and services
 - *(monitoring)* Add Laravel Nightwatch monitoring support
 - *(validation)* Make hostname validation case-insensitive and expand allowed characters
+- *(proxy)* Validate stored config matches current proxy type
+- *(sync)* Sync install.sh, docker-compose, and env files to GitHub
+- *(preview-env)* Add production variable fallback for docker-compose
+- *(deployment)* Add command_hidden flag to hide command text in logs
+- *(deployment)* Add command_hidden flag to hide command text in logs (#9167)
+- *(jobs)* Implement exponential backoff for unreachable servers
+- Shared server environment variables
+- Predefined server variables (COOLIFY_SERVER_NAME, COOLIFY_SERVER_UUID)
+- Add 'is_preserve_repository_enabled' option to application controler for PATCH, POST
+- Add 'is_preserve_repository_enabled' field to shared data applications and remove from request
+- Add 'is_preserve_repository_enabled' field to openapi specifications for deployment
+- *(subscription)* Add billing interval to price preview
+- *(reset-password)* Add IPv6 support and header poisoning protection
+- *(databases)* Add public port timeout configuration
+- *(api)* Add support for Preserve Repository During Deployment in API (#8371)
+- *(ui)* Add two step confirmation to enable self registration
+- *(ui)* Add two step confirmation to enable self registration (#9277)
+- *(templates)* Add ElectricSQL docker compose template
+- *(service)* Add ElectricSQL (#8190)
+- *(deployments)* Support Docker image tags for preview deployments
+- *(ui)* Show task name on title for scheduled task single view
+- *(ui)* Add enable/disable button for scheduled task
+- *(ui)* Reorganize scheduled task single view layout
+- *(ui)* Add helper text for frequency input on scheduled task view
+- *(ui)* Improve schedule task single view for better UX (#9266)
+- Refresh private repository if updating
+- Refresh repos on private github app (#8621)
+- Shared server environment variables (#7764)
+- *(forms)* Make textarea monospace opt-in and improve multiline toggle
+- *(jobs)* Implement exponential backoff for unreachable servers (#9184)
+- *(service)* Update Convex to current latest version (#9392)
+- *(service)* Update Rivet to v2.2.0 (#9378)
+- Add grimmory service and database configuration to compose template
+- *(service)* Add grimmory (#9109)
+- *(service)* Update Supabase to current latest versions (#8316)
 
 ### 🐛 Bug Fixes
 
@@ -4715,6 +4749,7 @@ All notable changes to this project will be documented in this file.
 - *(docker)* Skip cleanup stale warning on cloud instances
 - *(deployment)* Disable build server during restart operations
 - *(deployment)* Disable build server during restart operations (#9045)
+- *(service)* Allow overriding GOTRUE_SITE_URL in Supabase template
 - *(docker)* Log failed cleanup attempts when server is not functional
 - *(environment-variable)* Guard refresh against missing or stale variables
 - *(github-webhook)* Handle unsupported event types gracefully
@@ -4724,6 +4759,131 @@ All notable changes to this project will be documented in this file.
 - *(validation)* Make hostname validation case-insensitive and expand allowed name characters (#9134)
 - *(team)* Resolve server limit checks for API token authentication (#9123)
 - *(subscription)* Prevent duplicate subscriptions with updateOrCreate
+- *(parsers)* Preserve ${VAR} references in compose instead of resolving to DB values
+- *(parsers)* Preserve ${VAR} references in compose instead of resolving to DB values (#9147)
+- *(proxy)* Validate stored config matches proxy type (#9146)
+- *(backup)* Prevent notification failures from affecting backup status
+- *(backup)* Prevent notification failures from affecting backup status (#9162)
+- *(preview-env)* Ensure auto-created preview env vars inherit runtime/buildtime flags (#9164)
+- *(api)* Validate server ownership in domains endpoint and scope activity lookups
+- *(api)* Validate server ownership in domains endpoint and scope activity lookups (#9166)
+- *(backup)* Validate MongoDB collection names in backup input
+- *(backup)* Validate MongoDB collection names in backup input (#9168)
+- *(terminal)* Apply authorization middleware to terminal bootstrap routes
+- *(terminal)* Apply authorization middleware to terminal bootstrap routes (#9169)
+- *(settings)* Require instance admin authorization for updates page
+- *(livewire)* Add Locked attributes and consolidate container name validation
+- *(livewire)* Add Locked attributes and consolidate container name validation (#9171)
+- *(validation)* Allow ampersands and quotes in shell-safe command pattern
+- *(livewire)* Add input validation to unmanaged container operations
+- *(livewire)* Add input validation to unmanaged container operations (#9172)
+- *(deployment)* Normalize whitespace in pre/post deployment commands
+- *(deployment)* Normalize whitespace in pre/post deployment commands (#9173)
+- *(storage)* Consistent path validation and escaping for file volumes
+- *(storage)* Consistent path validation and escaping for file volumes (#9176)
+- *(backup)* Use escapeshellarg for credentials in database backup commands
+- *(backup)* Use escapeshellarg for credentials in backup commands (#9175)
+- Server env shows not found on application variables input field on autocomplete
+- Server env not showing for services
+- Predefined server env were not generated for existing servers
+- Change value cast to encrypted for shared environment variables
+- Filter available scopes based on existing variables in env var input
+- Add 'is_literal' flag to shared environment variables for servers
+- Remove redundant sort call in environment variables display
+- Ensure authorization check for server view in mount method
+- Streamline migration for adding predefined server variables to existing servers
+- *(storage)* Use escapeshellarg for volume names in shell commands
+- *(api)* Add volume name validation to storage API endpoints
+- *(storage)* Use escapeshellarg for volume names in shell commands (#9185)
+- Add URL validation for GitHub source api_url and html_url fields
+- Sanitize error output in server validation logs
+- Sanitize error output in server validation logs (#9197)
+- Harden TrustHosts middleware and use base_url() for password reset links
+- Use server-side config for password reset URL generation (#9193)
+- Add URL validation for notification webhook fields
+- *(webhooks)* Add validation to block unsafe webhook URLs
+- Add input validation for install/build/start command fields
+- Add input validation for install/build/start command fields (#9227)
+- *(security)* Enforce team-scoped project/env lookups in onboarding
+- Add validation and escaping for Docker network names
+- Add validation and escaping for Docker network names (#9228)
+- *(forms)* Use Alpine state for password visibility toggles
+- *(application)* Persist redirect value in setRedirect
+- *(application)* Persist redirect value in setRedirect (#9279)
+- Harden GetLogs Livewire component with locked properties and input validation
+- Add mass assignment protection to models
+- *(security)* Harden model assignment and sensitive data handling
+- Harden GetLogs Livewire component properties (#9229)
+- *(clone)* Include uuid field when cloning persistent volumes
+- *(clone)* Exclude uuid when replicating persistent volumes (#9290)
+- *(notification)* Updated cloud subscription links to valid url
+- *(notification)* Updated cloud subscription links to valid url (#9296)
+- *(service)* Listmonk db config env typo (#9250)
+- *(langfuse)* Pin clickhouse version to avoid error during clickhouse init
+- *(service)* Pin clickhouse version on Langfuse service to avoid error during clickhouse init (#9236)
+- *(service)* Use FQDN instead of URL for Grafana GF_SERVER_DOMAIN
+- *(service)* Use FQDN instead of URL for Grafana GF_SERVER_DOMAIN (#9080)
+- *(database)* Auto-generate missing CA cert on SSL regeneration
+- *(validation)* Add input validation for database public port and proxy timeout
+- *(validation)* Add input validation for database public port and proxy timeout (#9272)
+- *(ui)* Keep sidebar visible on scheduled task single view
+- *(models)* Use snake_case for Eloquent attribute access
+- *(validation)* Add input validation for emails configuration
+- *(validation)* Add input validation for emails configuration (#9259)
+- *(validation)* Add input validation for database backup timeout
+- *(validation)* Add timeout validation to database backup API endpoints
+- *(validation)* Validate cron expressions in update backup API endpoint
+- *(validation)* Add input validation for database backup timeout (#9245)
+- *(validation)* Add input validation for sentinel configuration
+- *(validation)* Add input validation for sentinel configuration (#9243)
+- *(validation)* Add input validation for server advanced settings page
+- *(validation)* Add input validation for server_disk_usage_check_frequency on API
+- *(validation)* Use int|string for Livewire numeric properties and remove nullable from API rules
+- *(validation)* Add input validation for server advanced settings page (#9242)
+- *(validation)* Add URL validation for proxy redirect input
+- *(validation)* Add URL validation for proxy redirect input (#9241)
+- *(validation)* Add input validation for port exposes and port mappings fields
+- *(validation)* Add input validation for port exposes and port mappings fields (#9240)
+- *(validation)* Add IP validation for custom DNS servers input
+- *(validation)* Add IP validation for custom DNS servers input (#9239)
+- *(validation)* Add input validation for resource limit fields
+- *(validation)* Add input validation for resource limit fields (#9238)
+- *(database)* Refresh SSL/status state and harden clone writes
+- *(deployment)* Resolve shared env vars using main server
+- *(github)* Reset branch state when refreshing repositories
+- *(models)* Replace forceFill/forceCreate with fill/create and add fillable guards
+- *(models)* Replace forceCreate with forceFill+save pattern
+- *(models)* Add missing uuid to StandaloneDocker initialization
+- *(shared-variables)* Support direct mount params and comment field for server variables
+- *(deployment)* Resolve intermittent pre-deployment command failures (#9165)
+- *(project)* Handle slash branches in public repo URLs
+- *(backups)* Enforce retention and clean up stale executions
+- *(services)* Bump images of alexandrie to fix security issue (#9434)
+- *(template)* Minecraft was on wrong category (#9387)
+- *(service)* Fix librechat healthcheck
+- *(service)* Fix librechat healthcheck and update dependencies  (#9358)
+- *(templates)* Fix n8n and task-runners health check endpoints
+- *(service)* N8n task-runners health check fails (#9309)
+- *(service)* Add CORS defaults to Directus templates
+- *(service)* Directus cors not applied in preflight requests (#9081)
+- *(supabase)* Fix TUS resumable upload 401 by adding leading slash to TUS_URL_PATH
+- *(supabase)* Update to latest versions, fix vector config, add missing env vars
+- *(supabase)* Fix vector log collection bugs
+- *(supabase)* Add MCP route protection, update edge functions to Deno.serve()
+- *(supabase)* Comprehensive template update to match official self-hosting setup
+- Default STORAGE_TENANT_ID to storage-single-tenant for backward compatibility
+- *(service)* Allow overriding GOTRUE_SITE_URL in Supabase template (#9079)
+- *(service)* Nextcloud workers exhaustion due to low interval healthcheck
+- *(service)* Nextcloud workers exhaustion due to low interval healthcheck (#9440)
+- *(security)* Add apk upgrade to helper and realtime Dockerfiles
+- *(security)* Run apk upgrade in development Dockerfile
+- *(security)* Bump helper and realtime versions across manifests
+- *(docker)* Add apk upgrade to helper, realtime, and development Dockerfiles (#9437)
+- *(validation)* Allow quoted shell args in docker options
+- *(validation)* Allow quoted docker run options in custom config (#9481)
+- *(template)* Several templates on wrong catagory.
+- *(service)* Several templates on wrong catagory. (#9449)
+- *(service)* Netbird-client wrong volume path (#9484)
 
 ### 💼 Other
 
@@ -5194,6 +5354,13 @@ All notable changes to this project will be documented in this file.
 - *(deps)* Bump rollup from 4.57.1 to 4.59.0 (#8691)
 - *(deps)* Bump league/commonmark from 2.8.0 to 2.8.1
 - *(deps)* Bump league/commonmark from 2.8.0 to 2.8.1 (#8793)
+- *(deps)* Bump league/commonmark from 2.8.1 to 2.8.2
+- *(deps)* Bump league/commonmark from 2.8.1 to 2.8.2 (#9047)
+- *(deps)* Bump phpseclib/phpseclib from 3.0.49 to 3.0.50
+- *(deps)* Bump phpseclib/phpseclib from 3.0.49 to 3.0.50 (#9044)
+- *(template)* Update Rivet template
+- *(deps-dev)* Bump vite from 7.3.0 to 7.3.2
+- *(deps-dev)* Bump vite from 7.3.0 to 7.3.2 (#9457)
 
 ### 🚜 Refactor
 
@@ -5835,6 +6002,24 @@ All notable changes to this project will be documented in this file.
 - *(team)* Make server limit methods accept optional team parameter
 - *(team)* Update serverOverflow to use static serverLimit
 - *(docker)* Simplify installation and remove version pinning
+- *(jobs)* Extract container resolution logic for deployment commands
+- Simplify remote process chain and harden ActivityMonitor
+- Simplify remote process chain and harden ActivityMonitor (#9189)
+- Split invitation endpoint into GET (show) and POST (accept)
+- Split invitation endpoint into GET/POST flow (#9192)
+- *(docker)* Migrate service startup from Artisan commands to shell scripts
+- Simplify TrustHosts middleware and use APP_URL as base_url fallback
+- Move admin route into middleware group and harden authorization
+- Move admin route into middleware group (#9225)
+- Use random_int() for email change verification codes
+- Use random_int() for email change verification codes (#9226)
+- Scope server and project queries to current team
+- Scope server and project queries to current team (#9230)
+- Define explicit fillable attributes on all Eloquent models
+- *(models)* Add fillable attributes for database configuration options
+- Use forceCreate() for internal model creation
+- Define explicit fillable attributes on all Eloquent models (#9282)
+- *(models)* Extract defaultStandaloneDockerAttributes method on Server
 
 ### 📚 Documentation
 
@@ -5974,24 +6159,26 @@ All notable changes to this project will be documented in this file.
 - Add transcript lol link and logo to readme (#7331)
 - *(api)* Change domains to urls
 - *(api)* Improve domains API docs
-- Update changelog
-- Update changelog
 - *(api)* Improve app endpoint deprecation description
 - Add Coolify design system reference
 - Add Coolify design system reference (#8237)
-- Update changelog
-- Update changelog
-- Update changelog
 - *(sponsors)* Add huge sponsors section and reorganize list
 - *(application)* Add comments explaining commit selection logic for rollback support
 - *(readme)* Add VPSDime to Big Sponsors list
 - *(readme)* Move MVPS to Huge Sponsors section
 - *(settings)* Clarify Do Not Track helper text
-- Update changelog
-- Update changelog
 - *(sponsors)* Add ScreenshotOne as a huge sponsor
 - *(sponsors)* Update Brand.dev to Context.dev
 - *(readme)* Add PetroSky Cloud to sponsors
+- *(tdd)* Add bug fix workflow section with TDD requirements
+- Update changelog
+- Update changelog
+- Update changelog
+- Update changelog
+- Update changelog
+- Update changelog
+- Update changelog
+- Update changelog
 
 ### ⚡ Performance
 
@@ -6016,6 +6203,9 @@ All notable changes to this project will be documented in this file.
 - *(campfire)* Update comment for DISABLE_SSL environment variable for clarity
 - Update background colors to use gray-50 for consistency in auth views
 - *(modal-confirmation)* Improve mobile responsiveness
+- *(docker)* Standardize service startup log message format
+- *(dev)* Standardize log message format with INFO/ERROR prefixes
+- *(navbar)* Use tracking-tight instead of tracking-wide for logo
 
 ### 🧪 Testing
 
@@ -6841,6 +7031,16 @@ All notable changes to this project will be documented in this file.
 - *(versions)* Bump coolify, sentinel, and traefik versions
 - *(versions)* Bump sentinel to 0.0.21
 - *(service)* Disable Booklore service (#9105)
+- Bump version to 4.0.0-beta.470
+- *(docker)* Update container image versions
+- Bump version to 4.0.0-beta.471
+- Update pr-quality.yaml
+- Update Supabase template to latest versions
+- *(community)* Remove bounty-related templates and docs
+- *(community)* Remove Algora bounty program references (#9436)
+- *(service)* Update nextcloud healthcheck endpoint
+- *(service)* Update nextcloud healthcheck endpoint (#9470)
+- Bump version to 4.0.0-beta.472
 
 ### ◀️ Revert
 

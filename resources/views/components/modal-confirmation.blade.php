@@ -211,14 +211,19 @@
     <template x-teleport="body">
         <div x-show="modalOpen"
             class="fixed inset-0 z-99 flex min-h-full items-center justify-center overflow-y-auto p-4" x-cloak>
-            <div x-show="modalOpen" class="absolute inset-0 bg-black/50 backdrop-blur-[2px]">
+            <div x-show="modalOpen" class="absolute inset-0 bg-black/50 backdrop-blur-[2px]"
+                x-transition:enter="transition-opacity ease-out duration-200"
+                x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100"
+                x-transition:leave="transition-opacity ease-in duration-150"
+                x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0">
             </div>
-            <div x-show="modalOpen" x-trap.inert.noscroll="modalOpen" x-transition:enter="ease-out duration-100"
-                x-transition:enter-start="opacity-0 -translate-y-2 sm:scale-95"
-                x-transition:enter-end="opacity-100 translate-y-0 sm:scale-100"
-                x-transition:leave="ease-in duration-100"
-                x-transition:leave-start="opacity-100 translate-y-0 sm:scale-100"
-                x-transition:leave-end="opacity-0 -translate-y-2 sm:scale-95"
+            <div x-show="modalOpen" x-trap.inert.noscroll="modalOpen"
+                x-transition:enter="transition ease-out duration-200"
+                x-transition:enter-start="opacity-0 scale-95"
+                x-transition:enter-end="opacity-100 scale-100"
+                x-transition:leave="transition ease-in duration-150"
+                x-transition:leave-start="opacity-100 scale-100"
+                x-transition:leave-end="opacity-0 scale-95"
                 class="application-settings-form application-settings-section relative flex max-h-[calc(100dvh-2rem)] w-full flex-col lg:min-w-[36rem] lg:max-w-2xl"
                 style="box-shadow: 0 0 0 1px var(--coollabs-hairline), var(--shadow-modal)">
                 <header class="flex-nowrap!">
@@ -287,8 +292,17 @@
                                     <div class="relative mb-2" x-data="{ decodedText: confirmationText }">
                                         <div class="relative">
                                             <input type="text" x-model="decodedText" readonly class="input">
-                                            <x-copy-button resolve="decodedText"
-                                                class="absolute top-1/2 right-2 -translate-y-1/2" />
+                                            <button x-show="window.isSecureContext"
+                                                @click.prevent="navigator.clipboard.writeText(decodedText); $el.innerHTML = '<svg class=\'w-5 h-5 text-green-500\' fill=\'none\' stroke=\'currentColor\' viewBox=\'0 0 24 24\'><path stroke-linecap=\'round\' stroke-linejoin=\'round\' stroke-width=\'2\' d=\'M5 13l4 4L19 7\' /></svg>'; setTimeout(() => $el.innerHTML = '<svg class=\'w-5 h-5\' fill=\'none\' stroke=\'currentColor\' viewBox=\'0 0 24 24\'><path stroke-linecap=\'round\' stroke-linejoin=\'round\' stroke-width=\'2\' d=\'M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z\' /></svg>', 1000)"
+                                                class="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-gray-400 hover:text-gray-300 transition-colors"
+                                                title="Copy to clipboard">
+                                                <svg class="w-5 h-5" fill="none" stroke="currentColor"
+                                                    viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round"
+                                                        stroke-width="2"
+                                                        d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                                </svg>
+                                            </button>
                                         </div>
                                     </div>
 
@@ -325,12 +339,15 @@
                                         step++;
                                     } else {
                                         submitting = true;
-                                        submitForm().then((result) => {
-                                            submitting = false;
-                                            modalOpen = false;
-                                            resetModal();
-                                        }).catch(() => {
-                                            submitting = false;
+                                        modalOpen = false;
+                                        $nextTick(() => {
+                                            submitForm().then((result) => {
+                                                submitting = false;
+                                                resetModal();
+                                            }).catch(() => {
+                                                submitting = false;
+                                                modalOpen = true;
+                                            });
                                         });
                                     }
                                 ">
@@ -379,17 +396,21 @@
                                         $wire.dispatch(dispatchEventType, dispatchEventMessage);
                                     }
                                     submitting = true;
-                                    submitForm().then((result) => {
-                                        submitting = false;
-                                        if (result === true) {
-                                            modalOpen = false;
-                                            resetModal();
-                                        } else {
-                                            passwordError = result;
-                                            password = '';
-                                        }
-                                    }).catch(() => {
-                                        submitting = false;
+                                    modalOpen = false;
+                                    $nextTick(() => {
+                                        submitForm().then((result) => {
+                                            submitting = false;
+                                            if (result === true) {
+                                                resetModal();
+                                            } else {
+                                                modalOpen = true;
+                                                passwordError = result;
+                                                password = '';
+                                            }
+                                        }).catch(() => {
+                                            submitting = false;
+                                            modalOpen = true;
+                                        });
                                     });
                                     ">
                                     <x-loading-on-button x-show="submitting" x-cloak />

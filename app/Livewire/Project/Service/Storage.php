@@ -2,6 +2,7 @@
 
 namespace App\Livewire\Project\Service;
 
+use App\Livewire\Project\Shared\Storages\All as StorageList;
 use App\Models\Application;
 use App\Models\LocalFileVolume;
 use App\Models\LocalPersistentVolume;
@@ -51,7 +52,7 @@ class Storage extends Component
 
         return [
             "echo-private:team.{$teamId},FileStorageChanged" => 'refreshStoragesFromEvent',
-            'refreshStorages',
+            'storageCountsChanged' => 'refreshStorages',
             'addNewVolume',
         ];
     }
@@ -77,7 +78,6 @@ class Storage extends Component
         $this->activeTab = $this->resolveDefaultTab();
         $this->fileStorage = collect();
         $this->loadFileStorageForActiveTab();
-        $this->name = $this->generateDefaultVolumeName();
     }
 
     public function refreshStoragesFromEvent()
@@ -88,11 +88,17 @@ class Storage extends Component
 
     public function refreshStorages()
     {
+        $hadVolumes = $this->cachedVolumeCount > 0;
+
         // Avoid loading full volume models onto this parent (child All owns that snapshot).
         $this->resource->unsetRelation('persistentStorages');
         $this->loadVolumeCount();
         $this->loadFileStorageMetaCounts();
         $this->loadFileStorageForActiveTab();
+
+        if ($this->activeTab === 'volumes' && $hadVolumes && $this->cachedVolumeCount > 0) {
+            $this->dispatch('refreshVolumeList')->to(StorageList::class);
+        }
     }
 
     public function setActiveTab(string $tab): void
@@ -202,7 +208,9 @@ class Storage extends Component
             $this->validate([
                 'name' => ValidationPatterns::volumeNameRules(),
                 'mount_path' => 'required|string',
-                'host_path' => ['nullable', 'string', 'regex:'.ValidationPatterns::DIRECTORY_PATH_PATTERN],
+                'host_path' => $this->isSwarm
+                    ? ['required', 'string', 'regex:'.ValidationPatterns::DIRECTORY_PATH_PATTERN]
+                    : ['nullable', 'string', 'regex:'.ValidationPatterns::DIRECTORY_PATH_PATTERN],
             ], array_merge(ValidationPatterns::volumeNameMessages(), [
                 'host_path.regex' => 'Host path must start with / and only contain safe path characters.',
             ]));
@@ -222,7 +230,6 @@ class Storage extends Component
             $this->dispatch('configurationChanged');
             $this->dispatch('success', 'Volume added successfully');
             $this->dispatch('closeStorageModal', 'volume');
-            $this->dispatch('refreshStorages');
         } catch (\Throwable $e) {
             return handleError($e, $this);
         }
@@ -257,7 +264,6 @@ class Storage extends Component
             $this->dispatch('configurationChanged');
             $this->dispatch('success', 'File mount added successfully');
             $this->dispatch('closeStorageModal', 'file');
-            $this->dispatch('refreshStorages');
         } catch (\Throwable $e) {
             return handleError($e, $this);
         }
@@ -292,7 +298,6 @@ class Storage extends Component
             $this->dispatch('configurationChanged');
             $this->dispatch('success', 'Host file mount added successfully');
             $this->dispatch('closeStorageModal', 'host-file');
-            $this->dispatch('refreshStorages');
         } catch (\Throwable $e) {
             return handleError($e, $this);
         }
@@ -331,7 +336,6 @@ class Storage extends Component
             $this->dispatch('configurationChanged');
             $this->dispatch('success', 'Directory mount added successfully');
             $this->dispatch('closeStorageModal', 'directory');
-            $this->dispatch('refreshStorages');
         } catch (\Throwable $e) {
             return handleError($e, $this);
         }
@@ -339,7 +343,7 @@ class Storage extends Component
 
     public function clearForm()
     {
-        $this->name = $this->generateDefaultVolumeName();
+        $this->name = '';
         $this->mount_path = '';
         $this->host_path = null;
         $this->file_storage_path = '';
@@ -370,13 +374,6 @@ class Storage extends Component
         }
 
         throw new \Exception('No valid resource type for file mount storage type!');
-    }
-
-    private function generateDefaultVolumeName(): string
-    {
-        $name = str($this->resource->name)->slug()->value();
-
-        return ($name ?: 'volume').'-data';
     }
 
     public function fileStoragePreviewPath(): string

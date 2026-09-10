@@ -1,12 +1,13 @@
 <?php
 
+use App\Jobs\DeleteResourceJob;
 use App\Livewire\Project\Shared\Danger;
 use App\Models\Application;
 use App\Models\Environment;
 use App\Models\InstanceSettings;
-use App\Models\OauthIdentity;
 use App\Models\Project;
 use App\Models\Server;
+use App\Models\Service;
 use App\Models\StandaloneDocker;
 use App\Models\Team;
 use App\Models\User;
@@ -62,28 +63,28 @@ test('delete returns error string when password is incorrect', function () {
     expect(Application::find($this->application->id))->not->toBeNull();
 });
 
-test('delete succeeds with correct password and redirects', function () {
-    Livewire::test(Danger::class, ['resource' => $this->application])
-        ->call('delete', 'test-password')
-        ->assertHasNoErrors();
-
-    // Resource should be soft-deleted
-    expect(Application::find($this->application->id))->toBeNull();
-});
-
-test('delete succeeds without password for an oauth user', function () {
-    OauthIdentity::create([
-        'user_id' => $this->user->id,
-        'provider' => 'oidc',
-        'issuer' => 'https://idp.example.com',
-        'provider_user_id' => 'oauth-user-id',
+test('delete redirects before dispatching resource cleanup after the response', function () {
+    $service = Service::factory()->create([
+        'environment_id' => $this->environment->id,
+        'server_id' => $this->server->id,
+        'destination_id' => $this->destination->id,
+        'destination_type' => $this->destination->getMorphClass(),
     ]);
 
-    Livewire::test(Danger::class, ['resource' => $this->application])
-        ->call('delete', '')
-        ->assertHasNoErrors();
+    $component = Livewire::test(Danger::class, ['resource' => $service])
+        ->set('projectUuid', $this->project->uuid)
+        ->set('environmentUuid', $this->environment->uuid)
+        ->call('delete', 'test-password')
+        ->assertHasNoErrors()
+        ->assertRedirectToRoute('project.resource.index', [
+            'project_uuid' => $this->project->uuid,
+            'environment_uuid' => $this->environment->uuid,
+        ]);
 
-    expect(Application::find($this->application->id))->toBeNull();
+    expect($component->effects)->toHaveKey('redirectUsingNavigate', true);
+
+    expect(Service::find($service->id))->not->toBeNull();
+    Queue::assertPushed(DeleteResourceJob::class, fn (DeleteResourceJob $job) => $job->resource->is($service));
 });
 
 test('delete applies selectedActions from checkbox state', function () {

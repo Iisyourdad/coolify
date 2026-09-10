@@ -91,7 +91,7 @@
                     <img x-cloak x-show="preview" :src="preview" alt="Profile picture preview"
                         class="h-full w-full object-cover">
                     @if (auth()->user()->avatar_path)
-                        <img src="{{ route('profile.avatar', ['v' => auth()->user()->updated_at->timestamp]) }}"
+                        <img src="{{ profile_avatar_url(auth()->user()) }}"
                             x-show="!preview" alt="{{ auth()->user()->name }}" class="h-full w-full object-cover">
                     @else
                         <span x-show="!preview">
@@ -134,22 +134,15 @@
                     <div class="flex items-end gap-2">
                         <x-forms.input id="email" label="Email" readonly />
                         <x-forms.button @click="openEmailModal()" type="button"
-                            :disabled="$uses_sso" x-bind:disabled="emailModalOpen || @js($uses_sso)">
+                            x-bind:disabled="emailModalOpen">
                             Change
                         </x-forms.button>
                     </div>
                 </div>
-             </section>
-         </form>
+            </section>
+        </form>
 
-         @if ($uses_sso)
-             <x-callout type="info" title="Email managed by SSO">
-                 Signed in with SSO @if ($sso_provider_label) ({{ $sso_provider_label }}) @endif. Email is managed by your SSO provider.
-             </x-callout>
-         @endif
-
-         @if (! $uses_sso)
-         <template x-teleport="body">
+        <template x-teleport="body">
             <div x-show="emailModalOpen" x-cloak
                 class="fixed inset-0 z-99 flex h-screen w-screen items-center justify-center p-4">
                 <div class="absolute inset-0 h-full w-full bg-black/55 backdrop-blur-[3px]"></div>
@@ -198,8 +191,7 @@
                     @endif
                 </div>
             </div>
-         </template>
-         @endif
+        </template>
 
         <form wire:submit="resetPassword">
             <section class="application-settings-section">
@@ -226,8 +218,9 @@
                     <h2>Two-factor authentication</h2>
                     <p>Add a time-based one-time password to protect your account.</p>
                 </div>
-                @if (! request()->user()->two_factor_confirmed_at
-                        && session('status') !== 'two-factor-authentication-enabled')
+                @if (request()->user()->two_factor_confirmed_at)
+                    <x-status-badge status="Enabled" type="success" />
+                @elseif (session('status') !== 'two-factor-authentication-enabled')
                     <form action="/user/two-factor-authentication" method="POST">
                         @csrf
                         <x-forms.button type="submit">Configure 2FA</x-forms.button>
@@ -257,9 +250,9 @@
                             </form>
                             <div x-data="{ showCode: false }">
                                 <div x-cloak x-show="showCode" class="space-y-2 pb-3">
-                                    <x-forms.copy-input
+                                    <x-forms.copy-button
                                         text="{{ decrypt(request()->user()->two_factor_secret) }}" />
-                                    <x-forms.copy-input text="{{ request()->user()->twoFactorQrCodeUrl() }}" />
+                                    <x-forms.copy-button text="{{ request()->user()->twoFactorQrCodeUrl() }}" />
                                 </div>
                                 <x-forms.button type="button" x-on:click="showCode = !showCode">
                                     <span x-text="showCode ? 'Hide manual setup' : 'Show manual setup'"></span>
@@ -283,7 +276,7 @@
                         @if (session('status') === 'two-factor-authentication-confirmed'
                                 || session('status') === 'recovery-codes-generated')
                             <div
-                                class="grid gap-2 rounded-lg border border-neutral-200 bg-neutral-50 p-4 font-mono text-xs text-neutral-700 sm:grid-cols-2 dark:border-white/[0.07] dark:bg-white/[0.025] dark:text-fg-dim">
+                                class="grid gap-2 rounded-lg border border-neutral-200 bg-neutral-50 p-4 font-mono text-xs text-neutral-700 sm:grid-cols-2 dark:border-white/[0.07] dark:bg-white/[0.05] dark:text-fg-dim">
                                 @foreach (request()->user()->recoveryCodes() as $code)
                                     <div>{{ $code }}</div>
                                 @endforeach

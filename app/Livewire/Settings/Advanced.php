@@ -20,9 +20,6 @@ class Advanced extends Component
     public bool $is_registration_enabled;
 
     #[Validate('boolean')]
-    public bool $disable_registration_when_oauth_enabled;
-
-    #[Validate('boolean')]
     public bool $do_not_track;
 
     #[Validate('boolean')]
@@ -56,13 +53,14 @@ class Advanced extends Component
 
     public string $avatar_storage = 'local';
 
+    public ?string $image_cdn_url = null;
+
     public array $avatar_storage_options = [];
 
     public function rules()
     {
         return [
             'is_registration_enabled' => 'boolean',
-            'disable_registration_when_oauth_enabled' => 'boolean',
             'do_not_track' => 'boolean',
             'is_dns_validation_enabled' => 'boolean',
             'custom_dns_servers' => ['nullable', 'string', new ValidDnsServers],
@@ -75,6 +73,7 @@ class Advanced extends Component
             'webhook_allowed_internal_hosts' => 'nullable|string',
             'webhook_allow_localhost' => 'boolean',
             'domain_connect_private_key' => 'nullable|string',
+            'image_cdn_url' => 'nullable|url|max:255',
         ];
     }
 
@@ -88,7 +87,6 @@ class Advanced extends Component
         $this->allowed_ips = $this->settings->allowed_ips;
         $this->do_not_track = $this->settings->do_not_track;
         $this->is_registration_enabled = $this->settings->is_registration_enabled;
-        $this->disable_registration_when_oauth_enabled = $this->settings->disable_registration_when_oauth_enabled;
         $this->is_dns_validation_enabled = $this->settings->is_dns_validation_enabled;
         $this->is_api_enabled = $this->settings->is_api_enabled;
         $this->disable_two_step_confirmation = $this->settings->disable_two_step_confirmation;
@@ -102,6 +100,7 @@ class Advanced extends Component
         $this->avatar_storage = $this->settings->avatar_storage_type === 's3' && $this->settings->avatar_s3_storage_id
             ? 's3:'.$this->settings->avatar_s3_storage_id
             : 'local';
+        $this->image_cdn_url = $this->settings->image_cdn_url;
         $this->avatar_storage_options = [
             ['value' => 'local', 'label' => 'Local storage'],
             ...S3Storage::query()
@@ -204,7 +203,6 @@ class Advanced extends Component
         try {
             $this->authorize('update', $this->settings);
             $this->settings->is_registration_enabled = $this->is_registration_enabled;
-            $this->settings->disable_registration_when_oauth_enabled = $this->disable_registration_when_oauth_enabled;
             $this->settings->do_not_track = $this->do_not_track;
             $this->settings->is_dns_validation_enabled = $this->is_dns_validation_enabled;
             $this->settings->custom_dns_servers = $this->custom_dns_servers;
@@ -216,6 +214,7 @@ class Advanced extends Component
             $this->settings->is_mcp_server_enabled = $this->is_mcp_server_enabled;
             $this->settings->webhook_allowed_internal_hosts = $webhookAllowedInternalHosts ?? $this->settings->webhook_allowed_internal_hosts ?? [];
             $this->settings->webhook_allow_localhost = $this->webhook_allow_localhost;
+            $this->settings->image_cdn_url = filled($this->image_cdn_url) ? rtrim($this->image_cdn_url, '/') : null;
             $this->saveAvatarStorageSetting();
             $this->settings->save();
             $this->dispatch('success', 'Settings updated!');
